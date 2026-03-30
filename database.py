@@ -150,6 +150,13 @@ async def _create_tables():
             -- миграции tariffs
             ALTER TABLE tariffs ADD COLUMN IF NOT EXISTS duration_minutes INTEGER;
 
+            -- миграция типов курсов:
+            -- Тип 1 (марафон, end_date): сбрасываем duration, чтобы поля не конфликтовали
+            UPDATE tariffs
+            SET duration_days = NULL, duration_minutes = NULL, duration_text = ''
+            WHERE end_date IS NOT NULL
+              AND (duration_days IS NOT NULL OR duration_minutes IS NOT NULL);
+
             -- миграции tariff_resources
             ALTER TABLE tariff_resources ADD COLUMN IF NOT EXISTS invite_link TEXT;
 
@@ -547,7 +554,9 @@ async def get_active_subscriptions(user_id: int) -> list[dict]:
     """Активные подписки пользователя (не истёкшие)."""
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT p.*, t.name AS tariff_name
+            SELECT p.*, t.name AS tariff_name,
+                   t.end_date AS tariff_end_date,
+                   t.duration_days AS tariff_duration_days
             FROM purchases p
             JOIN tariffs t ON t.id = p.tariff_id
             WHERE p.user_id = $1
@@ -872,24 +881,25 @@ async def transfer_subscription(from_user: int, to_user: int, tariff_id: int):
 # ── Тексты бота ───────────────────────────────────────────────
 
 DEFAULT_BOT_TEXTS = {
-    "welcome": "Добро пожаловать в путеводитель стройной и здоровой фигуры!",
+    "welcome": "Добро пожаловать!",
     "tariff_selection": (
-        "👩🏻\u200d⚕️ Вашему вниманию представлены групповые и самостоятельные онлайн курсы "
-        "стройности и сборник пп-рецептов.\n\n"
-        "Если у вас остались вопросы, вы можете задать их через форму обратной связи.\n\n"
-        "Выберите подходящий и ознакомьтесь ОБЯЗАТЕЛЬНО "
-        "с описанием курса до регистрации 👇"
+        "Выберите подходящий курс и ознакомьтесь ОБЯЗАТЕЛЬНО "
+        "с описанием до регистрации 👇"
     ),
     "feedback": (
-        "Если у вас остались вопросы - напишите нам, "
-        "мы с удовольствием ответим.\n"
-        "Ваш диетолог."
+        "Если у вас остались вопросы — напишите нам, "
+        "мы с удовольствием ответим как освободимся."
     ),
     "no_active_subs": (
         "📋 У вас пока нет активных подписок.\n\n"
         "Выберите курс в разделе «Курсы стройности»."
     ),
     "payment_success": "✅ Оплата прошла успешно! Спасибо за покупку.",
+    "free_activation_success": (
+        "✅ Вы успешно подписались на бесплатный канал с гайдами.\n\n"
+        "Чтобы получить доступ к ресурсам нажмите кнопки ниже 👇"
+    ),
+    "activation_links": "🔗 Ссылки для доступа к курсу 👇",
     "notify_1day": "⏰ До окончания вашей подписки «{tariff_name}» остался 1 день.",
     "notify_3days": "⏰ До окончания вашей подписки «{tariff_name}» осталось 3 дня.",
     "subscription_end": "❌ Ваша подписка «{tariff_name}» закончилась.",
@@ -932,6 +942,8 @@ BOT_TEXT_LABELS = {
     "feedback": "Обратная связь",
     "no_active_subs": "Нет активных подписок",
     "payment_success": "Успешный платёж",
+    "free_activation_success": "Успешная активация бесплатного тарифа",
+    "activation_links": "Сообщение со ссылками после активации курса",
     "notify_1day": "Уведомление за 1 день",
     "notify_3days": "Уведомление за 3 дня",
     "subscription_end": "Конец подписки",

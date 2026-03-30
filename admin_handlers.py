@@ -50,7 +50,10 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
     """Обрабатывает callback-и с префиксом 'adm:'.
     Возвращает True если обработал, False — если не админский callback.
     """
-    callback = update.get("callback", update)
+    callback = update.get("callback", {})
+    # message лежит рядом с callback на верхнем уровне update
+    msg = update.get("message", {})
+
     callback_id = callback.get("callback_id", "")
     payload = callback.get("payload", "")
     sender = callback.get("user", callback.get("sender", {}))
@@ -63,10 +66,9 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         await bot.answer_callback(callback_id, text="⛔ Нет доступа")
         return True
 
-    msg = callback.get("message", {})
     body = msg.get("body", {})
     message_id = body.get("mid", "")
-    recipient = msg.get("recipient", {}) if msg else {}
+    recipient = msg.get("recipient", {})
     chat_id = int(recipient.get("chat_id") or user_id)
 
     await bot.answer_callback(callback_id)
@@ -237,12 +239,13 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
                 return True
             days = int(dur_val)
             dur_text = "Навсегда" if days == 0 else f"{days} дн."
-            duration_minutes = None
+            # Тип 2 (самостоятельный): устанавливаем продолжительность, сбрасываем дату окончания
             await db.update_tariff(
                 tid,
                 duration_days=days if days > 0 else 0,
                 duration_text=dur_text,
-                duration_minutes=duration_minutes,
+                duration_minutes=None,
+                end_date=None,
             )
             clear_state(user_id)
             tariff = await db.get_tariff(tid)
@@ -1627,7 +1630,8 @@ async def handle_admin_message(
             await bot.send_message(chat_id, "Введите число дней:")
             return True
         dur_text = f"{days} дн."
-        await db.update_tariff(tid, duration_days=days, duration_text=dur_text, duration_minutes=None)
+        # Тип 2 (самостоятельный): устанавливаем продолжительность, сбрасываем дату окончания
+        await db.update_tariff(tid, duration_days=days, duration_text=dur_text, duration_minutes=None, end_date=None)
         clear_state(user_id)
         tariff = await db.get_tariff(tid)
         await bot.send_message(chat_id, "Продолжительность обновлена ✅")
@@ -1641,11 +1645,13 @@ async def handle_admin_message(
         if not duration_minutes:
             await bot.send_message(chat_id, "Не удалось распознать. Введите например: 48ч или 120м")
             return True
+        # Тип 2 (самостоятельный): устанавливаем продолжительность, сбрасываем дату окончания
         await db.update_tariff(
             tid,
             duration_days=None,
             duration_minutes=duration_minutes,
             duration_text=dur_text,
+            end_date=None,
         )
         clear_state(user_id)
         tariff = await db.get_tariff(tid)
@@ -1702,7 +1708,14 @@ async def handle_admin_message(
             if not dt:
                 await bot.send_message(chat_id, "Формат: 16.03.2026 07:54")
                 return True
-            await db.update_tariff(tid, end_date=dt)
+            # Тип 1 (марафон): устанавливаем дату окончания, сбрасываем продолжительность
+            await db.update_tariff(
+                tid,
+                end_date=dt,
+                duration_days=None,
+                duration_minutes=None,
+                duration_text="",
+            )
             # Синхронизируем expires_at у всех активных подписок этого тарифа
             await db.update_active_purchases_expiry(tid, dt)
         clear_state(user_id)

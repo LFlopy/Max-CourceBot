@@ -12,14 +12,55 @@ from fsm import set_state, get_state, clear_state, user_states
 import payments
 
 
+# ── Форматирование продолжительности курса ───────────────────
+
+_MONTHS_RU = {
+    1: "января", 2: "февраля", 3: "марта", 4: "апреля",
+    5: "мая", 6: "июня", 7: "июля", 8: "августа",
+    9: "сентября", 10: "октября", 11: "ноября", 12: "декабря",
+}
+
+
+def _format_russian_date(dt) -> str:
+    return f"{dt.day} {_MONTHS_RU[dt.month]} {dt.year}"
+
+
+def _days_word(n: int) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return "день"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return "дня"
+    return "дней"
+
+
+def _format_course_duration(tariff: dict, expires_at=None) -> str:
+    """Строка о продолжительности/окончании курса для показа пользователю.
+
+    Для марафонов (end_date): 'Заканчивается: 21 апреля 2025 в 21:00'
+    Для самостоятельных (duration_days):
+      - без expires_at: 'Курс продолжительностью 89 дней'
+      - с expires_at:   'Доступ до: 15 июня 2025'
+    """
+    end_date = tariff.get("end_date")
+    duration_days = tariff.get("duration_days")
+    if end_date:
+        date_str = _format_russian_date(end_date)
+        time_str = end_date.strftime("%H:%M")
+        return f"Заканчивается: {date_str} в {time_str}"
+    if duration_days:
+        if expires_at:
+            return f"Доступ до: {_format_russian_date(expires_at)}"
+        return f"Курс продолжительностью {duration_days} {_days_word(duration_days)}"
+    return ""
+
+
 # ── Тексты (оферта — не редактируется через бота) ────────────
 
 OFERTA_TEXT = (
     "ОФЕРТА И ДОГОВОР НА ПРОХОЖДЕНИЕ КУРСОВ.\n\n"
-    "Исполнитель, действующий на основании свидетельства о государственной "
-    "регистрации физического лица в качестве индивидуального предпринимателя, "
-    "предлагает лицам, полностью оплатившим любую программу курсов, заключить "
-    "Договор оферты на следующих условиях 👇"
+    "Индивидуальный предприниматель предлагает лицам, полностью "
+    "оплатившим любую программу курсов, заключить Договор оферты "
+    "на следующих условиях 👇"
 )
 
 
@@ -118,6 +159,9 @@ async def _activate_purchase(bot: MaxBot, purchase: dict):
 
     # Уведомляем пользователя
     success_text = await db.get_bot_text("payment_success")
+    duration_str = _format_course_duration(tariff_data, expires_at)
+    if duration_str:
+        success_text = f"{success_text}\n\n⏰ {duration_str}"
     await bot.send_message(user_id, success_text)
 
     # Уведомляем администраторов о новой подписке
@@ -160,14 +204,28 @@ async def _activate_purchase(bot: MaxBot, purchase: dict):
         except Exception:
             pass
 
+    # Уведомляем о вступлении в каждый ресурс
+    for res in resources:
+        chat_title = res.get("chat_title") or str(res["chat_id"])
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    f"Пользователь {full_name}\n"
+                    f"ID: {user_id}\n\n"
+                    f"Вступил в {chat_title}",
+                )
+            except Exception:
+                pass
+
     # Отправляем ссылки на ресурсы
     if resources:
-        # Проверяем, есть ли invite_link у ресурсов
+        links_text = await db.get_bot_text("activation_links")
         resources_with_links = [r for r in resources if r.get("invite_link")]
         if resources_with_links:
             await bot.send_message(
                 user_id,
-                "🔗 Ссылки для доступа к курсу 👇",
+                links_text,
                 keyboard=kb.resource_links_buttons(resources_with_links),
             )
         else:
@@ -177,14 +235,14 @@ async def _activate_purchase(bot: MaxBot, purchase: dict):
             if channel_link:
                 await bot.send_message(
                     user_id,
-                    "🔗 Ссылка для доступа к курсу 👇",
+                    links_text,
                     keyboard=kb.channel_link_button(channel_link),
                 )
             else:
                 res_names = [r.get("chat_title") or str(r["chat_id"]) for r in resources]
                 await bot.send_message(
                     user_id,
-                    "✅ Вы добавлены в ресурсы:\n" + "\n".join(f"• {n}" for n in res_names),
+                    links_text + "\n" + "\n".join(f"• {n}" for n in res_names),
                 )
 
     btn = await db.get_button_texts()
@@ -334,17 +392,19 @@ async def handle_start(bot: MaxBot, chat_id: int, sender: dict):
 
 async def handle_callback(bot: MaxBot, update: dict):
     """Обработка нажатий inline-кнопок."""
-    callback = update.get("callback", update)
+    callback = update.get("callback", {})
+    # message лежит рядом с callback на верхнем уровне update, НЕ внутри callback
+    msg = update.get("message", {})
+
     callback_id = callback.get("callback_id", "")
     payload = callback.get("payload", "")
     sender = callback.get("user", callback.get("sender", {}))
     user_id = int(sender.get("user_id", 0))
 
-    msg = callback.get("message", {})
     body = msg.get("body", {})
     message_id = body.get("mid", "")
 
-    recipient = msg.get("recipient", {}) if msg else {}
+    recipient = msg.get("recipient", {})
     chat_id = int(recipient.get("chat_id") or user_id)
 
     print(f"  [callback] callback_id={callback_id!r} message_id={message_id!r} chat_id={chat_id}")
@@ -372,26 +432,18 @@ async def handle_callback(bot: MaxBot, update: dict):
 
     elif payload == "get_bonus":
         user_tariff_ids = await db.get_active_tariff_ids(user_id)
-        # Проверяем, что пользователь реально состоит в ресурсах тарифа
-        verified_tariff_ids = []
-        for tid in user_tariff_ids:
-            resources = await db.get_tariff_resources(tid)
-            if not resources:
-                verified_tariff_ids.append(tid)
-                continue
-            for res in resources:
-                if await bot.is_chat_member(res["chat_id"], user_id):
-                    verified_tariff_ids.append(tid)
-                    break
-        gifts = await db.get_gift_files_for_tariffs(verified_tariff_ids)
+        gifts = await db.get_gift_files_for_tariffs(list(user_tariff_ids))
         if not gifts:
             await reply("Пока для вас нет бонусов", keyboard=kb.main_menu(user_id, btn=btn))
             return
-        await reply("Вот ваш бонус", keyboard=kb.main_menu(user_id, btn=btn))
+        await reply("Вот ваш бонус 👇", keyboard=kb.main_menu(user_id, btn=btn))
+        seen_tokens: set[str] = set()
         for g in gifts:
             token = g.get("file_token") or ""
-            if token:
-                await bot.send_file_token(user_id, token, text="")
+            if not token or token in seen_tokens:
+                continue
+            seen_tokens.add(token)
+            await bot.send_file_token(user_id, token, text="")
 
     # ── Курсы стройности ─────────────────────────────────
     elif payload == "courses" or payload == "back_courses":
@@ -422,20 +474,12 @@ async def handle_callback(bot: MaxBot, update: dict):
             price_str = f"~~{tariff['old_price']}₽~~ **{tariff['price']}₽**"
         else:
             price_str = f"**{tariff['price']}₽**"
-        # Динамическая продолжительность: если есть end_date, считаем от сегодня
-        end_date = tariff.get("end_date")
-        print(f"  [debug] tariff={tariff['id']} end_date={end_date} type={type(end_date)}")
-        if end_date:
-            days_left = (end_date - datetime.now()).days
-            if days_left < 0:
-                days_left = 0
-            duration_str = f"{days_left} дн."
-        else:
-            duration_str = tariff.get("duration_text") or "не указана"
+        duration_str = _format_course_duration(tariff)
+        duration_line = f"\n⏰ {duration_str}" if duration_str else ""
         text = (
             f"📌 **{tariff['name']}**\n"
-            f"💰 Цена: {price_str}\n"
-            f"⏱ Продолжительность: {duration_str}\n\n"
+            f"💰 Цена: {price_str}"
+            f"{duration_line}\n\n"
             f"{tariff.get('description') or ''}"
         )
         await reply(
@@ -476,6 +520,21 @@ async def handle_callback(bot: MaxBot, update: dict):
                 {"type": "link", "text": "💳 Перейти к оплате", "url": tariff_tmp["payment_link"]}
             ]]}}
             await reply(f"💳 Для оплаты тарифа **{tariff_tmp['name']}** перейдите по ссылке:", keyboard=pay_kb)
+            await db.add_user_log(user_id, f"Вызвал оплату тарифа «{tariff_tmp['name']}»")
+            user_data = await db.get_user(user_id)
+            full_name = f"{user_data['first_name']} {user_data['last_name']}".strip() if user_data else str(user_id)
+            for admin_id in ADMIN_IDS:
+                try:
+                    await bot.send_message(
+                        admin_id,
+                        f"Пользователь {full_name}\n"
+                        f"ID: {user_id}\n"
+                        f"Вызвал оплату тарифа {tariff_tmp['name']}\n"
+                        f"Способ оплаты: внешняя ссылка\n"
+                        f"Сумма: {base_price:.0f}₽",
+                    )
+                except Exception:
+                    pass
         else:
             await _do_create_payment(bot, user_id, tariff_id, base_price, None, btn, reply)
 
@@ -648,26 +707,28 @@ async def handle_callback(bot: MaxBot, update: dict):
 
         # Добавляем в ресурсы
         resources = await db.get_tariff_resources(tariff_id)
+        _fn = f"{sender.get('first_name', '')} {sender.get('last_name', '')}".strip() or str(user_id)
         for res in resources:
             await bot.add_chat_member(res["chat_id"], [user_id])
+            chat_title = res.get("chat_title") or str(res["chat_id"])
+            for admin_id in ADMIN_IDS:
+                try:
+                    await bot.send_message(
+                        admin_id,
+                        f"Пользователь {_fn}\n"
+                        f"ID: {user_id}\n\n"
+                        f"Вступил в {chat_title}",
+                    )
+                except Exception:
+                    pass
 
         resources_with_links = [r for r in resources if r.get("invite_link")]
+        free_text = await db.get_bot_text("free_activation_success")
         if resources_with_links:
-            text = (
-                "✅ Вы успешно подписались на бесплатный канал с гайдами.\n\n"
-                "Чтобы получить доступ к ресурсам нажмите кнопки ниже 👇"
-            )
-            await reply(text, keyboard=kb.resource_links_buttons(resources_with_links))
+            await reply(free_text, keyboard=kb.resource_links_buttons(resources_with_links))
         else:
             channel_link = tariff.get("channel_link") or "https://max.ru"
-            text = (
-                "✅ Вы успешно подписались на бесплатный канал с гайдами.\n\n"
-                "Ссылка на него придет через несколько секунд.\n"
-                "— 📈 Канал ДИЕТОЛОГ | ПСИХОЛОГ\n\n"
-                "Чтобы получить доступ к ресурсам нажмите кнопку "
-                "\"🔗 Ссылки для доступа\" 👇"
-            )
-            await reply(text, keyboard=kb.channel_link_button(channel_link))
+            await reply(free_text, keyboard=kb.channel_link_button(channel_link))
 
     # ── Мои подписки ─────────────────────────────────────
     elif payload == "my_subs":
@@ -681,9 +742,14 @@ async def handle_callback(bot: MaxBot, update: dict):
         else:
             lines = ["📋 Ваши подписки:\n"]
             for s in subs:
-                exp = s.get("expires_at")
-                exp_str = f" (до {exp.strftime('%d.%m.%Y')})" if exp else " (бессрочно)"
-                lines.append(f"✅ {s['tariff_name']}{exp_str}")
+                # Собираем псевдо-тариф из полей подписки для форматирования
+                fake_tariff = {
+                    "end_date": s.get("tariff_end_date"),
+                    "duration_days": s.get("tariff_duration_days"),
+                }
+                dur_str = _format_course_duration(fake_tariff, expires_at=s.get("expires_at"))
+                dur_line = f"\n   ⏰ {dur_str}" if dur_str else ""
+                lines.append(f"✅ {s['tariff_name']}{dur_line}")
             for p in pending:
                 lines.append(f"⏳ {p['tariff_name']} — ожидает подтверждения оплаты")
             # Если подписки есть, но ни у одного ресурса нет invite_link — добавляем пояснение
@@ -799,6 +865,22 @@ async def handle_message(bot: MaxBot, update: dict):
                 ]]}},
             )
             clear_state(user_id)
+            await db.add_user_log(user_id, f"Вызвал оплату тарифа «{tariff['name']}» с промокодом {promo['code']}")
+            user_data = await db.get_user(user_id)
+            full_name = f"{user_data['first_name']} {user_data['last_name']}".strip() if user_data else str(user_id)
+            for admin_id in ADMIN_IDS:
+                try:
+                    await bot.send_message(
+                        admin_id,
+                        f"Пользователь {full_name}\n"
+                        f"ID: {user_id}\n"
+                        f"Вызвал оплату тарифа {tariff['name']}\n"
+                        f"Промокод: {promo['code']} (-{discount}%)\n"
+                        f"Способ оплаты: внешняя ссылка\n"
+                        f"Сумма: {final_price:.0f}₽",
+                    )
+                except Exception:
+                    pass
         else:
             await bot.send_message(
                 chat_id,
@@ -843,7 +925,7 @@ async def handle_message(bot: MaxBot, update: dict):
 
         await bot.send_message(
             chat_id,
-            "✅ Ваше сообщение отправлено! Эксперт ответит, как освободится.",
+            "✅ Ваше сообщение отправлено! Мы ответим, как освободимся.",
             keyboard=kb.main_menu(user_id, btn=btn),
         )
         return

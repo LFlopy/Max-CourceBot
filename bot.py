@@ -228,13 +228,7 @@ async def handle_prodamus_webhook(request: web.Request) -> web.Response:
 
         print("🔥 WEBHOOK DATA:", dict(data))
 
-        order_id = (
-            data.get("order_num")
-            or data.get("order_id")
-            or data.get("order")
-            or ""
-        )
-
+        # --- Извлекаем статус оплаты ---
         status = (
             data.get("status")
             or data.get("payment_status")
@@ -242,30 +236,57 @@ async def handle_prodamus_webhook(request: web.Request) -> web.Response:
             or ""
         ).lower()
 
-        print(f"  [webhook] Prodamus: order_id={order_id} status={status}")
-
         if status not in ("success", "paid", "succeeded", "ok"):
-            print("⛔ Неуспешный статус:", status)
+            print(f"⛔ Неуспешный статус: {status}")
             return web.Response(text="OK")
 
-        # Ищем покупку
-        purchase = await db.get_pending_purchase_by_payment_id(order_id)
+        # --- Собираем ВСЕ возможные идентификаторы из webhook ---
+        # Prodamus может вернуть наш UUID в разных полях в зависимости от версии API
+        _id_fields = ("order_num", "order_id", "order", "payment_id", "id")
+        candidate_ids = []
+        for field in _id_fields:
+            val = data.get(field)
+            # Защита от None и пустых строк; приведение к str
+            if val is not None:
+                val_str = str(val).strip()
+                if val_str and val_str not in candidate_ids:
+                    candidate_ids.append(val_str)
+
+        print(f"  [webhook] Prodamus: status={status}, candidate_ids={candidate_ids}")
+
+        # --- Последовательный поиск покупки по каждому кандидату ---
+        purchase = None
+        matched_id = None
+        for cid in candidate_ids:
+            purchase = await db.get_pending_purchase_by_payment_id(cid)
+            if purchase:
+                matched_id = cid
+                break
+
         if not purchase:
-            print(f"  [webhook] Покупка не найдена: order_id={order_id}")
+            # Fallback-лог: выводим ВСЕ поля для отладки
+            print(f"  [webhook] ❌ Покупка не найдена ни по одному ID: {candidate_ids}")
+            print(f"  [webhook] Полные данные webhook для отладки: {dict(data)}")
             return web.Response(text="OK")
 
-        # Проверяем подпись (если есть secret_key)
+        # --- Проверяем подпись (если есть secret_key) ---
         method = await db.get_payment_method(purchase["payment_method_id"])
         if method and method.get("secret_key"):
             signature = request.headers.get("Sign", "")
             #f not payments.ProdamusProvider.verify_signature(body, method["secret_key"], signature):
-                #rint(f"  [webhook] Неверная подпись для order_id={order_id}")
+                #rint(f"  [webhook] Неверная подпись для order_id={matched_id}")
                #return web.Response(status=403, text="Invalid signature")
 
-        # Активируем
+        # --- Активируем покупку ---
         await db.add_user_log(purchase["user_id"], "Оплатил (webhook Prodamus)")
         await _activate_purchase(bot, purchase)
-        print(f"  [webhook] ✅ Платёж order_id={order_id} user={purchase['user_id']} — активирован")
+        print(f"  [webhook] ✅ Платёж matched_id={matched_id} user={purchase['user_id']} — активирован")
+
+        # TODO на будущее: сохранять в purchases отдельное поле external_order_id
+        # с тем значением, которое Prodamus считает своим order_id.
+        # Это позволит делать обратную сверку и ручной поиск при спорах.
+        # Также можно передавать purchase.id в metadata при создании платежа,
+        # чтобы webhook возвращал его как есть — самый надёжный способ матчинга.
 
     except Exception as e:
         logger.exception("[webhook] Ошибка обработки: %s", e)

@@ -76,24 +76,18 @@ class MaxBot:
             )
         return data
 
-    async def send_file_token(self, chat_id: int, token: str, text: str = "") -> dict:
-        """Отправляет ранее загруженный файл по token."""
+    async def send_file_token(self, user_id: int, token: str, text: str = "") -> dict:
+        """Отправляет ранее загруженный файл по token пользователю в личку."""
         payload = {
             "text": text,
             "format": "markdown",
             "attachments": [{"type": "file", "payload": {"token": token}}],
         }
-        status, data = await self._request(
+        _, data = await self._request(
             "POST", "/messages",
-            params={"chat_id": chat_id},
+            params={"user_id": user_id},
             json=payload,
         )
-        if status != 200:
-            status, data = await self._request(
-                "POST", "/messages",
-                params={"user_id": chat_id},
-                json=payload,
-            )
         return data
 
     async def forward_attachment(self, chat_id: int, att_type: str, token: str,
