@@ -142,10 +142,11 @@ def payment_button(payment_link: str) -> dict:
 def channel_link_button(link: str) -> dict:
     return _kb([
         [{"type": "link", "text": "🔗 Ссылки для доступа", "url": link}],
+        [{"type": "callback", "text": "🔙 Назад", "payload": "back_main"}],
     ])
 
 
-def resource_links_buttons(resources: list[dict]) -> dict:
+def resource_links_buttons(resources: list[dict], back_payload: str = "back_main") -> dict:
     """Кнопки со ссылками на каждый ресурс тарифа."""
     buttons = []
     for res in resources:
@@ -153,7 +154,18 @@ def resource_links_buttons(resources: list[dict]) -> dict:
         if link:
             title = res.get("chat_title") or "Ресурс"
             buttons.append([{"type": "link", "text": f"🔗 {title}", "url": link}])
+    buttons.append([{"type": "callback", "text": "🔙 Назад", "payload": back_payload}])
     return _kb(buttons)
+
+
+# ── Согласие при /start ──────────────────────────────────────
+
+def consent_buttons() -> dict:
+    return _kb([
+        [{"type": "link", "text": "📄 Договор оферты", "url": OFERTA_URL}],
+        [{"type": "link", "text": "🔒 Политика конфиденциальности", "url": PRIVACY_URL}],
+        [{"type": "callback", "text": "✅ Согласен(а)", "payload": "agree_terms"}],
+    ])
 
 
 # ── Оферта ───────────────────────────────────────────────────

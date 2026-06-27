@@ -2,6 +2,7 @@
 
 import asyncpg
 from config import DATABASE_URL
+from utils import build_user_name, build_user_template_context, format_template
 
 pool: asyncpg.Pool | None = None
 
@@ -172,6 +173,9 @@ async def _create_tables():
                 action      TEXT NOT NULL,
                 created_at  TIMESTAMP DEFAULT NOW()
             );
+
+            -- согласие с офертой и политикой конфиденциальности
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_agreed BOOLEAN DEFAULT FALSE;
         """)
 
 
@@ -196,6 +200,25 @@ async def create_gift_file(file_token: str, file_name: str, tariff_ids: list[int
                 gift_id, tid,
             )
         return dict(row)
+
+
+async def get_gift_files_for_tariff(tariff_id: int) -> list[dict]:
+    """Возвращает гифт файлы, привязанные к конкретному тарифу."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT gf.id, gf.file_token, gf.file_name, gf.created_at
+            FROM gift_files gf
+            JOIN gift_file_tariffs gft ON gft.gift_id = gf.id
+            WHERE gft.tariff_id = $1
+            ORDER BY gf.created_at DESC, gf.id DESC
+        """, tariff_id)
+        return [dict(r) for r in rows]
+
+
+async def delete_gift_file(gift_id: int):
+    """Удаляет гифт файл (каскадно удаляет привязки к тарифам)."""
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM gift_files WHERE id = $1", gift_id)
 
 
 async def get_gift_files_for_tariffs(tariff_ids: list[int]) -> list[dict]:
@@ -446,6 +469,20 @@ async def save_user_phone(user_id: int, phone: str):
         )
 
 
+async def has_terms_agreed(user_id: int) -> bool:
+    async with pool.acquire() as conn:
+        return bool(await conn.fetchval(
+            "SELECT terms_agreed FROM users WHERE user_id = $1", user_id
+        ))
+
+
+async def set_terms_agreed(user_id: int):
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET terms_agreed = TRUE WHERE user_id = $1", user_id
+        )
+
+
 async def is_user_banned(user_id: int) -> bool:
     async with pool.acquire() as conn:
         val = await conn.fetchval(
@@ -481,6 +518,21 @@ async def get_no_sub_user_ids() -> list[int]:
             SELECT u.user_id FROM users u
             LEFT JOIN purchases p ON p.user_id = u.user_id
             WHERE p.id IS NULL AND u.is_banned = FALSE
+        """)
+        return [r["user_id"] for r in rows]
+
+
+async def get_no_paid_sub_user_ids() -> list[int]:
+    """Пользователи без активных платных подписок (нет активных покупок на платные тарифы)."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT u.user_id FROM users u
+            WHERE u.is_banned = FALSE
+              AND u.user_id NOT IN (
+                  SELECT DISTINCT p.user_id FROM purchases p
+                  JOIN tariffs t ON t.id = p.tariff_id
+                  WHERE p.status = 'active' AND t.is_free = FALSE
+              )
         """)
         return [r["user_id"] for r in rows]
 
@@ -603,6 +655,17 @@ async def get_active_tariff_ids(user_id: int) -> set[int]:
         return {r["tariff_id"] for r in rows}
 
 
+async def get_unlocked_tariff_ids(user_id: int) -> set[int]:
+    """Р’РѕР·РІСЂР°С‰Р°РµС‚ set id С‚Р°СЂРёС„РѕРІ, РєРѕС‚РѕСЂС‹Рµ СѓР¶Рµ РєРѕРіРґР°-С‚Рѕ Р±С‹Р»Рё Р°РєС‚РёРІРЅС‹ Сѓ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT DISTINCT tariff_id FROM purchases
+            WHERE user_id = $1
+              AND status IN ('active', 'expired')
+        """, user_id)
+        return {r["tariff_id"] for r in rows}
+
+
 async def get_expired_purchases() -> list[dict]:
     """Покупки со статусом 'active', у которых expires_at уже прошёл.
     Возвращает purchase + tariff_name + user_id для обработки."""
@@ -659,7 +722,7 @@ async def get_active_purchases_missing_expiry() -> list[dict]:
         return [dict(r) for r in rows]
 
 
-def filter_tariffs_by_allowed_group(tariffs: list[dict], user_tariff_ids: set[int]) -> list[dict]:
+def filter_tariffs_by_allowed_group(tariffs: list[dict], access_tariff_ids: set[int]) -> list[dict]:
     """Фильтрует тарифы: оставляет те, у которых allowed_group пуст
     или пользователь имеет подписку на один из тарифов из allowed_group."""
     result = []
@@ -669,7 +732,7 @@ def filter_tariffs_by_allowed_group(tariffs: list[dict], user_tariff_ids: set[in
             result.append(t)
             continue
         required_ids = {int(x) for x in ag.split(",") if x.strip()}
-        if required_ids & user_tariff_ids:
+        if required_ids & access_tariff_ids:
             result.append(t)
     return result
 
@@ -881,14 +944,21 @@ async def transfer_subscription(from_user: int, to_user: int, tariff_id: int):
 # ── Тексты бота ───────────────────────────────────────────────
 
 DEFAULT_BOT_TEXTS = {
-    "welcome": "Добро пожаловать!",
+    "welcome": "Добро пожаловать в путеводитель стройной и здоровой фигуры!",
     "tariff_selection": (
-        "Выберите подходящий курс и ознакомьтесь ОБЯЗАТЕЛЬНО "
-        "с описанием до регистрации 👇"
+        "👩🏻\u200d⚕️ Я, Чунтонова Ольга Валерьевна, дипломированный диетолог-психолог, "
+        "эксперт в области питания с 2017 года.\n\n"
+        "Вашему вниманию представлены групповые и самостоятельные онлайн курсы "
+        "стройности и мой сборник пп-рецептов\n\n"
+        "Если у вас остались вопросы вы можете задать мне их лично -> "
+        "Чунтонова Ольга Валерьевна\n\n"
+        "Выберите подходящий и ознакомьтесь ОБЯЗАТЕЛЬНО "
+        "с описанием курса до регистрации 👇"
     ),
     "feedback": (
-        "Если у вас остались вопросы — напишите нам, "
-        "мы с удовольствием ответим как освободимся."
+        "Если у вас остались вопросы - напишите мне, "
+        "я с удовольствием отвечу как освобожусь.\n"
+        "Чунтонова Ольга Валерьевна, ваш диетолог."
     ),
     "no_active_subs": (
         "📋 У вас пока нет активных подписок.\n\n"
@@ -920,6 +990,9 @@ DEFAULT_BOT_TEXTS = {
         "Сумма: **{сумма}**\n\n"
         "Если у вас есть промокод — отправьте его сообщением.\n"
         "Или нажмите «Продолжить»."
+    ),
+    "unknown_message": (
+        "Чтобы отправить сообщение нужно перейти в личном кабинете в обратную связь."
     ),
     # Тексты кнопок ЛК
     "btn_courses": "🍏 Курсы",
@@ -953,6 +1026,7 @@ BOT_TEXT_LABELS = {
     "payment_failed": "Платёж не прошёл",
     "feedback_reply": "Ответ администрации пользователю",
     "promo_activation": "Активация промокода",
+    "unknown_message": "Неизвестное сообщение",
 }
 
 # Метки для кнопок ЛК
@@ -1271,3 +1345,39 @@ async def is_new_user(user_id: int) -> bool:
             "SELECT 1 FROM users WHERE user_id = $1", user_id
         )
         return val is None
+
+
+async def get_user_name(user_id: int, fallback: str = "") -> str:
+    """Возвращает отображаемое имя пользователя."""
+    user = await get_user(user_id)
+    return build_user_name(user, fallback=fallback or str(user_id))
+
+
+async def get_button_texts(user_id: int | None = None, **context) -> dict[str, str]:
+    """Загружает тексты кнопок ЛК из БД (или дефолтные)."""
+    if user_id is not None:
+        user = await get_user(user_id)
+        user_context = build_user_template_context(user, fallback=str(user_id))
+        user_context.update(context)
+        context = user_context
+
+    result = {}
+    for key in BUTTON_TEXT_LABELS:
+        result[key] = await get_bot_text(key, **context)
+    return result
+
+
+async def get_bot_text(key: str, user_id: int | None = None, **context) -> str:
+    """Возвращает текст бота из БД или дефолтный."""
+    async with pool.acquire() as conn:
+        val = await conn.fetchval(
+            "SELECT text FROM bot_texts WHERE key = $1", key
+        )
+
+    text = val if val is not None else DEFAULT_BOT_TEXTS.get(key, "")
+    if user_id is not None:
+        user = await get_user(user_id)
+        user_context = build_user_template_context(user, fallback=str(user_id))
+        user_context.update(context)
+        context = user_context
+    return format_template(text, **context)

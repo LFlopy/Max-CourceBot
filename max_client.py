@@ -50,15 +50,47 @@ class MaxBot:
         if not subs:
             print("  Webhook-ов нет")
 
+    # ── Подписка на webhook ──────────────────────────────────
+    async def subscribe_webhook(
+        self,
+        url: str,
+        update_types: list[str] | None = None,
+        secret: str | None = None,
+    ) -> tuple[bool, dict]:
+        """POST /subscriptions — подписывает бота на доставку обновлений
+        через webhook. После активной подписки long polling не работает."""
+        payload: dict = {"url": url}
+        if update_types:
+            payload["update_types"] = update_types
+        if secret:
+            payload["secret"] = secret
+        status, data = await self._request("POST", "/subscriptions", json=payload)
+        ok = status == 200 and data.get("success", True) is not False
+        if not ok:
+            print(f"  subscribe_webhook ERROR: status={status} data={data}")
+        return ok, data
+
+    async def unsubscribe_webhook(self, url: str) -> bool:
+        """DELETE /subscriptions — отписывает бота от webhook'а."""
+        status, data = await self._request(
+            "DELETE", "/subscriptions", params={"url": url},
+        )
+        if status != 200:
+            print(f"  unsubscribe_webhook ERROR: status={status} data={data}")
+            return False
+        return True
+
     # ── Отправка сообщения ───────────────────────────────────
     async def send_message(
         self,
         chat_id: int,
         text: str,
         keyboard: dict | None = None,
-        fmt: str = "markdown",
+        fmt: str | None = None,
     ) -> dict:
-        payload = {"text": text, "format": fmt}
+        payload = {"text": text}
+        if fmt:
+            payload["format"] = fmt
         if keyboard:
             payload["attachments"] = [keyboard]
 
@@ -80,7 +112,6 @@ class MaxBot:
         """Отправляет ранее загруженный файл по token пользователю в личку."""
         payload = {
             "text": text,
-            "format": "markdown",
             "attachments": [{"type": "file", "payload": {"token": token}}],
         }
         _, data = await self._request(
@@ -95,7 +126,6 @@ class MaxBot:
         """Пересылает вложение (image/file/video/audio) по token."""
         payload: dict = {
             "text": text,
-            "format": "markdown",
             "attachments": [{"type": att_type, "payload": {"token": token}}],
         }
         if keyboard:
@@ -124,7 +154,7 @@ class MaxBot:
         if not message_id:
             print("  edit_message: message_id пустой, пропускаем")
             return False
-        payload = {"text": text, "format": "markdown"}
+        payload = {"text": text}
         if keyboard:
             payload["attachments"] = [keyboard]
 
@@ -142,7 +172,6 @@ class MaxBot:
     async def upload_file(self, file_path: str, file_name: str,
                           file_type: str = "file") -> dict | None:
         """Загружает файл в два шага: получает URL, затем отправляет файл."""
-        # Шаг 1: получаем URL для загрузки
         status, data = await self._request(
             "POST", "/uploads", params={"type": file_type},
         )
@@ -151,7 +180,6 @@ class MaxBot:
             print(f"  upload ERROR step1: status={status}, data={data}")
             return None
 
-        # Шаг 2: загружаем файл на полученный URL
         headers = {"Authorization": self.token}
         with open(file_path, "rb") as f:
             form = aiohttp.FormData()
@@ -173,11 +201,9 @@ class MaxBot:
         token = upload.get("token", "")
         payload = {
             "text": text,
-            "format": "markdown",
             "attachments": [{"type": "file", "payload": {"token": token}}],
         }
 
-        # Retry — файл может быть ещё не готов на сервере
         for _ in range(3):
             status, data = await self._request(
                 "POST", "/messages",
@@ -192,7 +218,6 @@ class MaxBot:
                 )
             if status == 200:
                 return data
-            # attachment.not.ready — подождать и повторить
             if "not.ready" in str(data):
                 await asyncio.sleep(2)
                 continue
@@ -208,7 +233,6 @@ class MaxBot:
 
     # ── Добавление участника в чат ────────────────────────────
     async def add_chat_member(self, chat_id: int, user_ids: list[int]) -> bool:
-        """Добавляет пользователей в чат/канал. Возвращает True при успехе."""
         status, data = await self._request(
             "POST", f"/chats/{chat_id}/members",
             json={"user_ids": user_ids},
@@ -220,7 +244,6 @@ class MaxBot:
 
     # ── Проверка участия в чате ──────────────────────────────
     async def is_chat_member(self, chat_id: int, user_id: int) -> bool:
-        """Проверяет, состоит ли пользователь в чате/канале."""
         status, data = await self._request(
             "GET", f"/chats/{chat_id}/members",
             params={"user_ids": user_id},
@@ -235,7 +258,6 @@ class MaxBot:
 
     # ── Удаление участника из чата ────────────────────────────
     async def remove_chat_member(self, chat_id: int, user_id: int) -> bool:
-        """Удаляет пользователя из чата/канала. Возвращает True при успехе."""
         status, data = await self._request(
             "DELETE", f"/chats/{chat_id}/members",
             params={"user_id": user_id},
@@ -247,7 +269,6 @@ class MaxBot:
 
     # ── Выход из чата ────────────────────────────────────────
     async def leave_chat(self, chat_id: int) -> bool:
-        """Бот покидает чат/канал. Возвращает True при успехе."""
         status, data = await self._request(
             "DELETE", f"/chats/{chat_id}/members/me",
         )
@@ -258,7 +279,6 @@ class MaxBot:
 
     # ── Получить чаты бота ───────────────────────────────────
     async def get_chats(self) -> list[dict]:
-        """Возвращает список чатов/каналов, в которых состоит бот."""
         _, data = await self._request("GET", "/chats")
         return data.get("chats", [])
 

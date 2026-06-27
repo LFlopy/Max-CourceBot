@@ -2,12 +2,22 @@
 Точка входа. Запуск: python bot.py
 """
 import asyncio
+import hmac
 import logging
 from datetime import datetime, timedelta
 import re
 from aiohttp import web
 from max_client import MaxBot
-from config import BOT_TOKEN, WEBHOOK_HOST, WEBHOOK_PORT, WEBHOOK_BASE_URL
+from config import (
+    BOT_TOKEN,
+    WEBHOOK_HOST,
+    WEBHOOK_PORT,
+    WEBHOOK_BASE_URL,
+    MAX_WEBHOOK_PATH,
+    MAX_WEBHOOK_URL,
+    MAX_WEBHOOK_SECRET,
+    MAX_UPDATE_TYPES,
+)
 from handlers import handle_start, handle_callback, handle_message, _activate_purchase
 import database as db
 import payments
@@ -88,11 +98,11 @@ async def check_expired_subscriptions(bot: MaxBot):
                 await db.mark_purchase_expired(p["id"])
 
                 # Уведомляем пользователя
-                notify_text = await db.get_bot_text("subscription_end")
+                notify_text = await db.get_bot_text("subscription_end", user_id=user_id, tariff_name=tariff_name)
                 try:
                     await bot.send_message(
                         user_id,
-                        notify_text.format(tariff_name=tariff_name),
+                        notify_text,
                     )
                 except Exception:
                     pass
@@ -118,9 +128,9 @@ async def check_expired_subscriptions(bot: MaxBot):
                         if ok:
                             print(f"  [end_date] Удалён user={uid} из chat={res['chat_id']} (тариф «{tariff_name}»)")
                     await db.mark_purchase_expired(p["id"])
-                    notify_text = await db.get_bot_text("subscription_end")
+                    notify_text = await db.get_bot_text("subscription_end", user_id=uid, tariff_name=tariff_name)
                     try:
-                        await bot.send_message(uid, notify_text.format(tariff_name=tariff_name))
+                        await bot.send_message(uid, notify_text)
                     except Exception:
                         pass
 
@@ -160,7 +170,7 @@ async def check_pending_payments(bot: MaxBot):
                     await db.add_user_log(p["user_id"], "Не оплатил (отмена)")
                     await db.cancel_purchase(p["id"])
                     try:
-                        failed_text = await db.get_bot_text("payment_failed")
+                        failed_text = await db.get_bot_text("payment_failed", user_id=p["user_id"])
                         await bot.send_message(
                             p["user_id"],
                             failed_text,
@@ -175,46 +185,64 @@ async def check_pending_payments(bot: MaxBot):
         await asyncio.sleep(PAYMENT_CHECK_INTERVAL)
 
 
-async def polling_loop(bot: MaxBot):
-    """Основной polling-цикл обработки обновлений."""
-    marker = None
+async def process_update(bot: MaxBot, upd: dict) -> None:
+    """Обрабатывает один Update от MAX (одинаково для polling и webhook)."""
+    try:
+        # MAX не шлёт update_type — определяем по ключам
+        if "callback" in upd:
+            print(f"  [callback] payload={upd['callback'].get('payload', '?')}")
+            await handle_callback(bot, upd)
 
-    while True:
-        data = await bot.poll(marker)
-        updates = data.get("updates", [])
-        marker = data.get("marker", marker)
+        elif "message" in upd:
+            msg = upd["message"]
+            text = msg.get("body", {}).get("text", "")
+            sender = msg.get("sender", {})
+            recipient = msg.get("recipient", {})
+            chat_id = int(recipient.get("chat_id") or sender.get("user_id", 0))
+            print(f"  [message] text={text}")
 
-        for upd in updates:
-            try:
-                # MAX не шлёт update_type — определяем по ключам
-                if "callback" in upd:
-                    print(f"  [callback] payload={upd['callback'].get('payload', '?')}")
-                    await handle_callback(bot, upd)
+            if text.strip().startswith("/start"):
+                await handle_start(bot, chat_id, sender)
+            else:
+                await handle_message(bot, upd)
 
-                elif "message" in upd:
-                    msg = upd["message"]
-                    text = msg.get("body", {}).get("text", "")
-                    sender = msg.get("sender", {})
-                    recipient = msg.get("recipient", {})
-                    chat_id = int(recipient.get("chat_id") or sender.get("user_id", 0))
-                    print(f"  [message] text={text}")
+        elif "user" in upd and "message" not in upd and "callback" not in upd:
+            # bot_started — пользователь нажал «Начать» или перешёл по ссылке
+            user_info = upd.get("user", {})
+            chat_id = int(upd.get("chat_id") or user_info.get("user_id", 0))
+            print(f"  [bot_started] user_id={user_info.get('user_id')}")
+            await handle_start(bot, chat_id, user_info)
 
-                    if text.strip().startswith("/start"):
-                        await handle_start(bot, chat_id, sender)
-                    else:
-                        await handle_message(bot, upd)
+    except Exception as e:
+        print(f"❌ Ошибка: {e}")
+        import traceback
+        traceback.print_exc()
 
-                elif "user" in upd and "message" not in upd and "callback" not in upd:
-                    # bot_started — пользователь нажал «Начать» или перешёл по ссылке
-                    user_info = upd.get("user", {})
-                    chat_id = int(upd.get("chat_id") or user_info.get("user_id", 0))
-                    print(f"  [bot_started] user_id={user_info.get('user_id')}")
-                    await handle_start(bot, chat_id, user_info)
 
-            except Exception as e:
-                print(f"❌ Ошибка: {e}")
-                import traceback
-                traceback.print_exc()
+# ── MAX Webhook ────────────────────────────────────────────────
+
+async def handle_max_webhook(request: web.Request) -> web.Response:
+    """Принимает POST от MAX. Должен ответить 200 в течение 30 секунд,
+    иначе MAX считает доставку неуспешной и повторит попытку."""
+    bot: MaxBot = request.app["bot"]
+
+    print(f"  [max-webhook] headers={dict(request.headers)}")
+    # Проверяем секрет (если задан в config)
+    if MAX_WEBHOOK_SECRET:
+        received = request.headers.get("X-Max-Bot-Api-Secret", "")
+        if not hmac.compare_digest(received, MAX_WEBHOOK_SECRET):
+            print(f"  [max-webhook] ❌ Неверный X-Max-Bot-Api-Secret")
+            return web.Response(status=403, text="Forbidden")
+
+    try:
+        upd = await request.json()
+    except Exception as e:
+        print(f"  [max-webhook] ❌ Не удалось распарсить JSON: {e}")
+        return web.Response(status=400, text="Bad Request")
+
+    # Обрабатываем в фоне, чтобы быстро вернуть 200 OK
+    asyncio.create_task(process_update(bot, upd))
+    return web.Response(text="OK", status=200)
 
 
 # ── Webhook-сервер для Prodamus ────────────────────────────────
@@ -298,10 +326,16 @@ _webhook_runner: web.AppRunner | None = None
 
 
 async def start_webhook_server(bot: MaxBot) -> None:
-    """Запускает HTTP-сервер для приёма webhook-ов."""
+    """Запускает HTTP-сервер для приёма webhook-ов (MAX + платёжные)."""
     global _webhook_runner
     app = web.Application()
     app["bot"] = bot
+
+    # MAX webhook
+    app.router.add_post(MAX_WEBHOOK_PATH, handle_max_webhook)
+    app.router.add_get(MAX_WEBHOOK_PATH, lambda r: web.Response(text="OK"))
+
+    # Prodamus
     app.router.add_post("/prodamus/webhook", handle_prodamus_webhook)
     app.router.add_post("/prodamus/webhook/{tail:.*}", handle_prodamus_webhook)
     app.router.add_get("/prodamus/webhook", lambda r: web.Response(text="OK"))
@@ -312,8 +346,30 @@ async def start_webhook_server(bot: MaxBot) -> None:
     site = web.TCPSite(_webhook_runner, WEBHOOK_HOST, WEBHOOK_PORT)
     await site.start()
     print(f"🌐 Webhook-сервер запущен на {WEBHOOK_HOST}:{WEBHOOK_PORT}")
+    print(f"   MAX webhook (локально):    {MAX_WEBHOOK_PATH}")
+    print(f"   MAX webhook (публично):    {MAX_WEBHOOK_URL}")
     if WEBHOOK_BASE_URL:
-        print(f"   URL для Prodamus: {WEBHOOK_BASE_URL}/prodamus/webhook")
+        print(f"   URL для Prodamus:          {WEBHOOK_BASE_URL}/prodamus/webhook")
+
+
+async def subscribe_max_webhook(bot: MaxBot) -> None:
+    """Подписывает бота на доставку обновлений MAX по webhook."""
+    if not MAX_WEBHOOK_URL or not MAX_WEBHOOK_URL.startswith("https://"):
+        raise RuntimeError(
+            "MAX_WEBHOOK_URL должен быть HTTPS-адресом на порту 443. "
+            "Укажите его в config.py."
+        )
+    if not MAX_WEBHOOK_SECRET:
+        print("⚠️  MAX_WEBHOOK_SECRET не задан — рекомендуется указать его в config.py.")
+
+    ok, data = await bot.subscribe_webhook(
+        url=MAX_WEBHOOK_URL,
+        update_types=MAX_UPDATE_TYPES,
+        secret=MAX_WEBHOOK_SECRET or None,
+    )
+    if not ok:
+        raise RuntimeError(f"Не удалось подписаться на webhook MAX: {data}")
+    print(f"✅ Подписка на MAX webhook оформлена: {MAX_WEBHOOK_URL}")
 
 
 async def shutdown(bot: MaxBot):
@@ -339,18 +395,20 @@ async def main():
     name = me.get("first_name", "?")
     print(f"✅ Бот: {name} (@{me.get('username', '?')})")
 
-    # Удаляем webhook-и
+    # Сбрасываем старые подписки (на случай смены URL/секрета)
     await bot.cleanup_webhooks()
 
-    # Запускаем webhook-сервер
+    # Запускаем HTTP-сервер для приёма webhook-ов
     await start_webhook_server(bot)
 
-    print("🟢 Polling запущен. Отправь /start боту в MAX.")
+    # Подписываемся на доставку обновлений MAX через webhook
+    await subscribe_max_webhook(bot)
+
+    print("🟢 Webhook активен. Отправь /start боту в MAX.")
     print(f"🔄 Проверка подписок каждые {EXPIRY_CHECK_INTERVAL}с, платежей каждые {PAYMENT_CHECK_INTERVAL}с\n")
 
     try:
         await asyncio.gather(
-            polling_loop(bot),
             check_expired_subscriptions(bot),
             check_pending_payments(bot),
         )

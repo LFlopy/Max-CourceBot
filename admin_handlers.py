@@ -10,6 +10,7 @@ import database as db
 import admin_keyboards as akb
 
 from fsm import set_state, get_state, clear_state, user_states
+from utils import build_user_name, build_user_template_context, format_template, user_link
 
 
 def is_admin(user_id: int) -> bool:
@@ -695,6 +696,57 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         set_state(user_id, "adm_edit_media", tariff_id=tid)
         await reply("Отправьте ссылку на медиа (изображение) для тарифа\n(Или /empty чтобы удалить):", keyboard=akb.admin_back_to_settings(tid))
 
+    # ── Бонусные файлы тарифа: меню ──────────────────────────
+    elif payload.startswith("adm:tariff_gifts:"):
+        tid = int(payload.split(":")[2])
+        tariff = await db.get_tariff(tid)
+        if not tariff:
+            await reply("Тариф не найден")
+            return True
+        gifts = await db.get_gift_files_for_tariff(tid)
+        lines = []
+        for g in gifts:
+            name = g.get("file_name") or f"Файл #{g['id']}"
+            lines.append(f"• {name}")
+        if lines:
+            text = "🎁 Бонусные файлы тарифа «" + tariff["name"] + "»:\n\n" + "\n".join(lines)
+        else:
+            text = "🎁 Бонусные файлы тарифа «" + tariff["name"] + "»:\n\nФайлов нет."
+        await reply(text, keyboard=akb.admin_tariff_gifts_menu(tid))
+
+    # ── Бонусные файлы тарифа: добавить ──────────────────────
+    elif payload.startswith("adm:tariff_gift_add:"):
+        tid = int(payload.split(":")[2])
+        set_state(user_id, "adm_tariff_gift_wait_file", tariff_id=tid)
+        await reply("Отправьте боту новый бонусный файл:", keyboard=akb.admin_tariff_gift_wait_file(tid))
+
+    # ── Бонусные файлы тарифа: удалить (список) ──────────────
+    elif payload.startswith("adm:tariff_gift_del:"):
+        tid = int(payload.split(":")[2])
+        gifts = await db.get_gift_files_for_tariff(tid)
+        if not gifts:
+            await reply("Бонусных файлов нет.", keyboard=akb.admin_tariff_gifts_menu(tid))
+            return True
+        await reply("Выберите бонусный файл, который хотите удалить:", keyboard=akb.admin_tariff_gift_delete_list(gifts, tid))
+
+    # ── Бонусные файлы тарифа: подтверждение удаления ────────
+    elif payload.startswith("adm:tariff_gift_del_confirm:"):
+        parts = payload.split(":")
+        gift_id = int(parts[2])
+        tid = int(parts[3])
+        await db.delete_gift_file(gift_id)
+        gifts = await db.get_gift_files_for_tariff(tid)
+        lines = []
+        for g in gifts:
+            name = g.get("file_name") or f"Файл #{g['id']}"
+            lines.append(f"• {name}")
+        tariff = await db.get_tariff(tid)
+        if lines:
+            text = "✅ Файл удалён.\n\n🎁 Бонусные файлы тарифа «" + tariff["name"] + "»:\n\n" + "\n".join(lines)
+        else:
+            text = "✅ Файл удалён.\n\n🎁 Бонусные файлы тарифа «" + tariff["name"] + "»:\n\nФайлов нет."
+        await reply(text, keyboard=akb.admin_tariff_gifts_menu(tid))
+
     # ══════════════════════════════════════════════════════════
     # ══  НАСТРОЙКИ БОТА  ═════════════════════════════════════
     # ══════════════════════════════════════════════════════════
@@ -943,28 +995,35 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
     elif payload == "adm:bc_all":
         set_state(user_id, "adm_broadcast", bc_group="all")
         await reply(
-            "Группа: **Все пользователи**\n\nОтправьте текст рассылки:",
+            "Группа: **Все пользователи**\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
             keyboard=akb.admin_broadcast_cancel(),
         )
 
     elif payload == "adm:bc_paid":
         set_state(user_id, "adm_broadcast", bc_group="paid")
         await reply(
-            "Группа: **Оплатили тариф**\n\nОтправьте текст рассылки:",
+            "Группа: **Оплатили тариф**\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
             keyboard=akb.admin_broadcast_cancel(),
         )
 
     elif payload == "adm:bc_no_sub":
         set_state(user_id, "adm_broadcast", bc_group="no_sub")
         await reply(
-            "Группа: **Без подписки**\n\nОтправьте текст рассылки:",
+            "Группа: **Без подписки**\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
+            keyboard=akb.admin_broadcast_cancel(),
+        )
+
+    elif payload == "adm:bc_no_paid":
+        set_state(user_id, "adm_broadcast", bc_group="no_paid")
+        await reply(
+            "Группа: **Нет платных подписок**\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
             keyboard=akb.admin_broadcast_cancel(),
         )
 
     elif payload == "adm:bc_pending":
         set_state(user_id, "adm_broadcast", bc_group="pending")
         await reply(
-            "Группа: **Вызвал оплату, но не оплатил**\n\nОтправьте текст рассылки:",
+            "Группа: **Вызвал оплату, но не оплатил**\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
             keyboard=akb.admin_broadcast_cancel(),
         )
 
@@ -980,7 +1039,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         tariff = await db.get_tariff(tid)
         set_state(user_id, "adm_broadcast", bc_group="tariff", bc_tariff_id=tid)
         await reply(
-            f"Группа: **подписчики «{tariff['name']}»**\n\nОтправьте текст рассылки:",
+            f"Группа: **подписчики «{tariff['name']}»**\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
             keyboard=akb.admin_broadcast_cancel(),
         )
 
@@ -989,6 +1048,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         bc_group = sd.get("bc_group", "all")
         bc_tariff_id = sd.get("bc_tariff_id")
         bc_text = sd.get("bc_text", "")
+        bc_media = sd.get("bc_media", [])
         clear_state(user_id)
         if bc_group == "all":
             user_ids = await db.get_all_user_ids()
@@ -996,6 +1056,8 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
             user_ids = await db.get_paid_user_ids()
         elif bc_group == "no_sub":
             user_ids = await db.get_no_sub_user_ids()
+        elif bc_group == "no_paid":
+            user_ids = await db.get_no_paid_sub_user_ids()
         elif bc_group == "pending":
             user_ids = await db.get_pending_user_ids()
         elif bc_group == "tariff" and bc_tariff_id:
@@ -1005,7 +1067,14 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         sent = 0
         for uid in user_ids:
             try:
-                await bot.send_message(uid, bc_text)
+                rendered_text = await _render_broadcast_text(bc_text, uid)
+                if bc_media:
+                    first = bc_media[0]
+                    await bot.forward_attachment(uid, first["type"], first["token"], text=rendered_text)
+                    for m in bc_media[1:]:
+                        await bot.forward_attachment(uid, m["type"], m["token"])
+                else:
+                    await bot.send_message(uid, rendered_text)
                 sent += 1
             except Exception:
                 pass
@@ -1014,13 +1083,63 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
             keyboard=akb.admin_bot_settings(),
         )
 
-    elif payload.startswith("adm:bc_btn_tariff:"):
-        tid = int(payload.split(":")[2])
+    # ── Новая система кнопок для рассылки ──────────────────────
+    elif payload == "adm:bc_add_btns:yes":
+        sd = user_states.get(user_id, {})
+        set_state(user_id, "adm_broadcast_wait_input_button",
+                  bc_group=sd.get("bc_group"),
+                  bc_tariff_id=sd.get("bc_tariff_id"),
+                  bc_text=sd.get("bc_text"),
+                  bc_media=sd.get("bc_media"),
+                  bc_buttons=sd.get("bc_buttons", []))
+        await reply(
+            "📌 Отправьте кнопки в формате:\n"
+            "**Текст кнопки - https://ссылка.com**\n\n"
+            "Пример:\n"
+            "Статья 1 - https://example.com/article-1\n\n"
+            "Подойдут `-`, `--` и `—`.\n"
+            "Можно отправлять по одной кнопке или весь список сразу (разделяя строками)",
+            keyboard=akb.admin_broadcast_cancel(),
+        )
+
+    elif payload == "adm:bc_add_btns:tariff":
+        sd = user_states.get(user_id, {})
+        buttons = sd.get("bc_buttons", [])
+        if len(buttons) >= 5:
+            await bot.answer_callback(callback_id, text="Максимум 5 кнопок ⚠️")
+            return True
+        added_tariff_ids = {
+            b["tariff_id"] for b in buttons
+            if b.get("kind") == "tariff" and b.get("tariff_id")
+        }
+        tariffs = await db.list_tariffs()
+        await reply(
+            "💰 Выберите тариф для кнопки в рассылке:",
+            keyboard=akb.admin_broadcast_button_picker(tariffs, added_tariff_ids),
+        )
+
+    elif payload == "adm:bc_buttons_menu":
+        sd = user_states.get(user_id, {})
+        buttons = sd.get("bc_buttons", [])
+        if buttons:
+            can_add_more = len(buttons) < 5
+            await reply(
+                _format_broadcast_buttons_message(buttons),
+                keyboard=akb.admin_broadcast_button_list(buttons, can_add_more),
+            )
+        else:
+            await reply(
+                "➕ Добавить кнопки к рассылке?\n\n"
+                "Можно комбинировать тарифы и сторонние ссылки (до 5 кнопок).",
+                keyboard=akb.admin_broadcast_add_buttons(),
+            )
+
+    elif payload == "adm:bc_add_btns:no":
         sd = user_states.get(user_id, {})
         bc_group = sd.get("bc_group", "all")
         bc_tariff_id = sd.get("bc_tariff_id")
         bc_text = sd.get("bc_text", "")
-        tariff = await db.get_tariff(tid)
+        bc_media = sd.get("bc_media", [])
         clear_state(user_id)
         if bc_group == "all":
             user_ids = await db.get_all_user_ids()
@@ -1028,25 +1147,128 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
             user_ids = await db.get_paid_user_ids()
         elif bc_group == "no_sub":
             user_ids = await db.get_no_sub_user_ids()
+        elif bc_group == "no_paid":
+            user_ids = await db.get_no_paid_sub_user_ids()
         elif bc_group == "pending":
             user_ids = await db.get_pending_user_ids()
         elif bc_group == "tariff" and bc_tariff_id:
             user_ids = await db.get_tariff_user_ids(bc_tariff_id)
         else:
             user_ids = []
-        btn_label = f"💳 Оформить «{tariff['name']}»"
-        tariff_btn = {"type": "callback", "text": btn_label, "payload": f"pay:{tid}"}
-        bc_keyboard = {"type": "inline_keyboard", "payload": {"buttons": [[tariff_btn]]}}
         sent = 0
         for uid in user_ids:
             try:
-                await bot.send_message(uid, bc_text, keyboard=bc_keyboard)
+                rendered_text = await _render_broadcast_text(bc_text, uid)
+                if bc_media:
+                    first = bc_media[0]
+                    await bot.forward_attachment(uid, first["type"], first["token"], text=rendered_text)
+                    for m in bc_media[1:]:
+                        await bot.forward_attachment(uid, m["type"], m["token"])
+                else:
+                    await bot.send_message(uid, rendered_text)
                 sent += 1
             except Exception:
                 pass
         await reply(
             f"✅ Рассылка завершена.\nОтправлено: **{sent}** из **{len(user_ids)}** пользователей.",
             keyboard=akb.admin_bot_settings(),
+        )
+
+    elif payload == "adm:bc_add_btn":
+        sd = user_states.get(user_id, {})
+        set_state(user_id, "adm_broadcast_wait_input_button",
+                  bc_group=sd.get("bc_group"),
+                  bc_tariff_id=sd.get("bc_tariff_id"),
+                  bc_text=sd.get("bc_text"),
+                  bc_media=sd.get("bc_media"),
+                  bc_buttons=sd.get("bc_buttons", []))
+        await reply(
+            "📌 Отправьте кнопку в формате:\n"
+            "**Текст кнопки - https://ссылка.com**\n"
+            "Подойдут `-`, `--` и `—`.",
+            keyboard=akb.admin_broadcast_cancel(),
+        )
+
+    elif payload == "adm:bc_add_btn_disabled":
+        await bot.answer_callback(callback_id, text="Максимум 5 кнопок достигнут ⚠️")
+
+    elif payload == "adm:bc_send_with_btns":
+        sd = user_states.get(user_id, {})
+        bc_group = sd.get("bc_group", "all")
+        bc_tariff_id = sd.get("bc_tariff_id")
+        bc_text = sd.get("bc_text", "")
+        bc_media = sd.get("bc_media", [])
+        bc_buttons = sd.get("bc_buttons", [])
+        
+        # Формируем inline-клавиатуру из кнопок
+        bc_keyboard = _build_broadcast_keyboard(bc_buttons) if bc_buttons else None
+        
+        # Получаем список пользователей в зависимости от группы
+        if bc_group == "all":
+            user_ids = await db.get_all_user_ids()
+        elif bc_group == "paid":
+            user_ids = await db.get_paid_user_ids()
+        elif bc_group == "no_sub":
+            user_ids = await db.get_no_sub_user_ids()
+        elif bc_group == "no_paid":
+            user_ids = await db.get_no_paid_sub_user_ids()
+        elif bc_group == "pending":
+            user_ids = await db.get_pending_user_ids()
+        elif bc_group == "tariff" and bc_tariff_id:
+            user_ids = await db.get_tariff_user_ids(bc_tariff_id)
+        else:
+            user_ids = []
+        
+        clear_state(user_id)
+        sent = 0
+        for uid in user_ids:
+            try:
+                rendered_text = await _render_broadcast_text(bc_text, uid)
+                if bc_media:
+                    first = bc_media[0]
+                    await bot.forward_attachment(uid, first["type"], first["token"], text=rendered_text, keyboard=bc_keyboard)
+                    for m in bc_media[1:]:
+                        await bot.forward_attachment(uid, m["type"], m["token"])
+                else:
+                    await bot.send_message(uid, rendered_text, keyboard=bc_keyboard)
+                sent += 1
+            except Exception:
+                pass
+        
+        await reply(
+            f"✅ Рассылка завершена.\nОтправлено: **{sent}** из **{len(user_ids)}** пользователей.",
+            keyboard=akb.admin_bot_settings(),
+        )
+
+    elif payload.startswith("adm:bc_btn_tariff:"):
+        tid = int(payload.split(":")[2])
+        sd = user_states.get(user_id, {})
+        tariff = await db.get_tariff(tid)
+        if not tariff:
+            await bot.answer_callback(callback_id, text="Тариф не найден")
+            return True
+
+        buttons = list(sd.get("bc_buttons", []))
+        if len(buttons) >= 5:
+            await bot.answer_callback(callback_id, text="Максимум 5 кнопок ⚠️")
+            return True
+        if any(b.get("kind") == "tariff" and b.get("tariff_id") == tid for b in buttons):
+            await bot.answer_callback(callback_id, text="Этот тариф уже добавлен")
+            return True
+
+        buttons.append({"kind": "tariff", "text": tariff["name"], "tariff_id": tid})
+        can_add_more = len(buttons) < 5
+
+        set_state(user_id, "adm_broadcast_buttons_added",
+                  bc_group=sd.get("bc_group"),
+                  bc_tariff_id=sd.get("bc_tariff_id"),
+                  bc_text=sd.get("bc_text"),
+                  bc_media=sd.get("bc_media"),
+                  bc_buttons=buttons)
+
+        await reply(
+            _format_broadcast_buttons_message(buttons),
+            keyboard=akb.admin_broadcast_button_list(buttons, can_add_more),
         )
 
     # ── Сбор контактов ─────────────────────────────────────────
@@ -1073,7 +1295,8 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
     elif payload.startswith("adm:reply_feedback:"):
         target = int(payload.split(":")[2])
         set_state(user_id, "adm_reply_feedback", target_user_id=target)
-        await reply(
+        await bot.send_message(
+            chat_id,
             "Ответьте на вопрос. Это может быть текст, фото, видео "
             "или любое другое медиа вложение:",
             keyboard=akb.admin_cancel_feedback_reply(),
@@ -1082,7 +1305,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
     # ── Отмена ответа на обратную связь ─────────────────────────
     elif payload == "adm:cancel_feedback_reply":
         clear_state(user_id)
-        await reply("Ответ отменён.")
+        await bot.send_message(chat_id, "Ответ отменён.")
 
     # ── Забанить пользователя ─────────────────────────────────
     elif payload.startswith("adm:ban_user:"):
@@ -1092,8 +1315,10 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         name = ""
         if target_user:
             name = f"{target_user['first_name']} {target_user['last_name']}".strip()
-        await reply(
-            f"🚫 Пользователь {name} (id={target}) заблокирован.",
+        await bot.send_message(
+            chat_id,
+            f"🚫 Пользователь {user_link(name, target)} заблокирован.",
+            fmt="markdown",
         )
 
     # ══════════════════════════════════════════════════════════
@@ -1552,6 +1777,36 @@ async def handle_admin_message(
             await bot.send_message(chat_id, "❌ Не удалось сохранить гифт файл.", keyboard=akb.admin_main())
         return True
 
+    # ── 🎁 Бонусный файл тарифа: ожидание файла ───────────────
+    if state == "adm_tariff_gift_wait_file":
+        atts = attachments or []
+        file_token = ""
+        file_name = ""
+        for att in atts:
+            if not isinstance(att, dict):
+                continue
+            if att.get("type") != "file":
+                continue
+            att_payload = att.get("payload") or {}
+            file_token = att_payload.get("token") or att_payload.get("file_token") or ""
+            file_name = att_payload.get("name") or att_payload.get("file_name") or ""
+            if file_token:
+                break
+
+        if not file_token:
+            await bot.send_message(chat_id, "Пришлите именно файл (вложение).")
+            return True
+
+        tid = state_data.get("tariff_id")
+        gift = await db.create_gift_file(file_token=file_token, file_name=file_name, tariff_ids=[tid])
+        clear_state(user_id)
+        if gift:
+            tariff = await db.get_tariff(tid)
+            await bot.send_message(chat_id, "✅ Бонусный файл добавлен.", keyboard=akb.admin_tariff_gifts_menu(tid))
+        else:
+            await bot.send_message(chat_id, "❌ Не удалось сохранить файл.")
+        return True
+
     # ── Редактирование: название ──────────────────────────
     if state == "adm_edit_name":
         tid = state_data.get("tariff_id")
@@ -1855,8 +2110,9 @@ async def handle_admin_message(
         await bot.send_message(
             chat_id,
             f"✅ Подписка «{tariff['name']}» выдана пользователю "
-            f"{full_name} (id={target_id})",
+            f"{user_link(full_name, target_id)}",
             keyboard=akb.admin_subscribers(),
+            fmt="markdown",
         )
         return True
 
@@ -1928,10 +2184,9 @@ async def handle_admin_message(
                and att.get("payload", {}).get("token")
         ]
         if text:
-            reply_template = await db.get_bot_text("feedback_reply")
             await bot.send_message(
                 target_id,
-                reply_template.format(reply=text),
+                await db.get_bot_text("feedback_reply", user_id=target_id, reply=text),
             )
         # Пересылаем медиавложения пользователю
         for att in media_atts:
@@ -1945,6 +2200,7 @@ async def handle_admin_message(
         clear_state(user_id)
         await bot.send_message(
             chat_id, "✅ Ответ отправлен пользователю.",
+            keyboard=akb.admin_main(),
         )
         return True
 
@@ -1967,22 +2223,61 @@ async def handle_admin_message(
     if state == "adm_broadcast":
         bc_group = state_data.get("bc_group", "all")
         bc_tariff_id = state_data.get("bc_tariff_id")
-        set_state(user_id, "adm_broadcast_wait_tariff",
-                  bc_group=bc_group, bc_tariff_id=bc_tariff_id, bc_text=text)
-        tariffs = await db.list_tariffs()
+        bc_media = [
+            {"type": att.get("type"), "token": att.get("payload", {}).get("token")}
+            for att in (attachments or [])
+            if att.get("type") in ("image", "file", "video", "audio")
+            and att.get("payload", {}).get("token")
+        ]
+        set_state(user_id, "adm_broadcast_add_buttons",
+                  bc_group=bc_group, bc_tariff_id=bc_tariff_id, bc_text=text, bc_media=bc_media, bc_buttons=[])
         await bot.send_message(
             chat_id,
-            "Выберите тариф, кнопка оформления которого будет добавлена к рассылке:",
-            keyboard=akb.admin_broadcast_button_picker(tariffs),
+            "➕ Добавить кнопки к рассылке?\n\n"
+            "Можно комбинировать тарифы и сторонние ссылки (до 5 кнопок).\n"
+            "• **Сторонняя ссылка** — переход на URL\n"
+            "• **Кнопка тарифа** — оформление тарифа в боте\n"
+            "• **Без кнопки** — только текст/медиа",
+            keyboard=akb.admin_broadcast_add_buttons(),
         )
         return True
 
-    if state == "adm_broadcast_wait_tariff":
-        tariffs = await db.list_tariffs()
+    if state in ("adm_broadcast_wait_input_button", "adm_broadcast_buttons_added"):
+        parsed_buttons, invalid_line = _parse_broadcast_button_lines(text)
+        if invalid_line is not None or not parsed_buttons:
+            await bot.send_message(
+                chat_id,
+                "❌ Неверный формат! Используйте:\n"
+                "**Текст кнопки - URL**\n\n"
+                "Пример: Купить курс - https://example.com/buy\n"
+                "Можно отправлять по одной кнопке или списком, по одной строке на кнопку.",
+                keyboard=akb.admin_broadcast_cancel(),
+            )
+            return True
+
+        buttons = list(state_data.get("bc_buttons", []))
+        if len(buttons) + len(parsed_buttons) > 5:
+            await bot.send_message(
+                chat_id,
+                "❌ Максимум 5 кнопок в рассылке.",
+                keyboard=akb.admin_broadcast_cancel(),
+            )
+            return True
+
+        buttons.extend(parsed_buttons)
+        can_add_more = len(buttons) < 5
+
+        set_state(user_id, "adm_broadcast_buttons_added",
+                  bc_group=state_data.get("bc_group"),
+                  bc_tariff_id=state_data.get("bc_tariff_id"),
+                  bc_text=state_data.get("bc_text"),
+                  bc_media=state_data.get("bc_media"),
+                  bc_buttons=buttons)
+
         await bot.send_message(
             chat_id,
-            "Выберите тариф из списка или нажмите «Отправить без кнопки»:",
-            keyboard=akb.admin_broadcast_button_picker(tariffs),
+            _format_broadcast_buttons_message(buttons),
+            keyboard=akb.admin_broadcast_button_list(buttons, can_add_more),
         )
         return True
 
@@ -2258,7 +2553,7 @@ def _parse_datetime(text: str) -> datetime | None:
 async def _send_user_profile(bot: MaxBot, chat_id: int, profile: dict):
     """Отправляет профиль пользователя."""
     uid = profile["user_id"]
-    name = f"{profile['first_name']} {profile['last_name']}".strip() or "—"
+    name = f"{profile['first_name']} {profile['last_name']}".strip() or f"id:{profile['user_id']}"
 
     subs_lines = []
     for p in profile["purchases"]:
@@ -2268,19 +2563,19 @@ async def _send_user_profile(bot: MaxBot, chat_id: int, profile: dict):
 
     text = (
         f"User ID: **{uid}**\n"
-        f"Имя пользователя: **{name}**\n\n"
+        f"Имя пользователя: {user_link(name, uid)}\n\n"
         f"Подписки:\n{subs_text}\n\n"
         f"Кол-во оплат: **{profile['total_count']}**\n"
         f"Сумма оплат: **{profile['total_paid']:.0f}₽**\n"
         f"Средний чек: **{profile['avg_check']:.0f}₽**"
     )
-    await bot.send_message(chat_id, text, keyboard=akb.admin_user_profile(uid))
+    await bot.send_message(chat_id, text, keyboard=akb.admin_user_profile(uid), fmt="markdown")
 
 
 async def _send_user_profile_with_logs(bot: MaxBot, chat_id: int, profile: dict):
     """Отправляет профиль пользователя с логами действий."""
     uid = profile["user_id"]
-    name = f"{profile['first_name']} {profile['last_name']}".strip() or "—"
+    name = f"{profile['first_name']} {profile['last_name']}".strip() or f"id:{profile['user_id']}"
 
     # Активные тарифы
     active_tariffs = []
@@ -2311,12 +2606,12 @@ async def _send_user_profile_with_logs(bot: MaxBot, chat_id: int, profile: dict)
         logs_text = "нет логов"
 
     text = (
-        f"Пользователь: **{name}**\n"
+        f"Пользователь: {user_link(name, uid)}\n"
         f"ID: **{uid}**\n"
         f"Активные тарифы: {active_str}\n\n"
         f"Логи:{logs_text}"
     )
-    await bot.send_message(chat_id, text, keyboard=akb.admin_user_profile(uid))
+    await bot.send_message(chat_id, text, keyboard=akb.admin_user_profile(uid), fmt="markdown")
 
 
 async def _send_users_xlsx(bot: MaxBot, chat_id: int):
@@ -2523,3 +2818,62 @@ def _contact_request_kb() -> dict:
             [{"type": "request_contact", "text": "📱 Отправить номер телефона"}],
         ]},
     }
+
+
+def _parse_broadcast_button_lines(text: str) -> tuple[list[dict], str | None]:
+    """Парсит одну или несколько строк формата `Текст - URL`."""
+    buttons: list[dict] = []
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = re.match(r"^(?P<label>.+?)\s*[-–—]{1,2}\s*(?P<url>\S+)\s*$", line)
+        if not match:
+            return [], line
+        label = match.group("label").strip()
+        url = match.group("url").strip()
+        if not label or not url:
+            return [], line
+        buttons.append({"kind": "link", "text": label, "url": url})
+    return buttons, None
+
+
+def _format_broadcast_buttons_message(buttons: list[dict]) -> str:
+    lines = ["✅ Кнопки рассылки:\n"]
+    for i, btn in enumerate(buttons, 1):
+        if btn.get("kind") == "tariff" or btn.get("tariff_id"):
+            lines.append(f"{i}. 💰 **{btn['text']}**")
+        else:
+            lines.append(f"{i}. 🔗 **{btn['text']}** → {btn['url']}")
+    if len(buttons) < 5:
+        lines.append("\nМожно добавить ещё тариф или ссылку.")
+    return "\n".join(lines)
+
+
+def _build_broadcast_keyboard(buttons: list[dict]) -> dict:
+    """Формирует inline-клавиатуру из списка кнопок для рассылки."""
+    kb_buttons = []
+    for btn in buttons:
+        if btn.get("kind") == "tariff" or btn.get("tariff_id"):
+            kb_buttons.append([{
+                "type": "callback",
+                "text": btn["text"],
+                "payload": f"pay:{btn['tariff_id']}",
+            }])
+        else:
+            kb_buttons.append([{
+                "type": "link",
+                "text": btn["text"],
+                "url": btn["url"],
+            }])
+
+    return {
+        "type": "inline_keyboard",
+        "payload": {"buttons": kb_buttons},
+    }
+
+
+async def _render_broadcast_text(text: str, user_id: int) -> str:
+    """Рендерит текст рассылки под конкретного пользователя."""
+    user = await db.get_user(user_id)
+    return format_template(text, **build_user_template_context(user, fallback=str(user_id)))

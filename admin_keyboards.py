@@ -38,7 +38,6 @@ def admin_tariff_list(tariffs: list[dict], show_price: bool = False) -> dict:
         }])
     buttons.append([{"type": "callback", "text": "🔀 Изменить порядок", "payload": "adm:reorder"}])
     buttons.append([{"type": "callback", "text": "💰 Отображать цену в названии", "payload": "adm:toggle_price"}])
-    buttons.append([{"type": "callback", "text": "🎁 Гифт файлы", "payload": "adm:gifts"}])
     buttons.append([{"type": "callback", "text": "➕ Тариф", "payload": "adm:add_tariff"}])
     buttons.append([{"type": "callback", "text": "➕ Категория", "payload": "adm:add_category"}])
     buttons.append([{"type": "callback", "text": "🔙 Назад", "payload": "adm:back"}])
@@ -184,12 +183,44 @@ def admin_tariff_settings(tariff_id: int, is_active: bool) -> dict:
         [{"type": "callback", "text": "🧾 Название в чеке", "payload": f"adm:set_check:{tariff_id}"}],
         [{"type": "callback", "text": "🎉 Текст при успешной покупке", "payload": f"adm:set_success:{tariff_id}"}],
         [{"type": "callback", "text": "👥 Группа разрешённых", "payload": f"adm:set_allowed:{tariff_id}"}],
+        [{"type": "callback", "text": "🎁 Бонусный файл", "payload": f"adm:tariff_gifts:{tariff_id}"}],
         [{"type": "callback", "text": "🛒 Ссылка на покупку", "payload": f"adm:buy_link:{tariff_id}"}],
         [{"type": "callback", "text": "💾 Сохранить", "payload": f"adm:save_settings:{tariff_id}"}],
         [{"type": "callback", "text": hide_text, "payload": f"adm:toggle_active:{tariff_id}"}],
         [{"type": "callback", "text": "🗑 Удалить", "payload": f"adm:delete:{tariff_id}"}],
         [{"type": "callback", "text": "🔙 Назад", "payload": "adm:tariffs"}],
     ])
+
+
+# ── Бонусные файлы тарифа ─────────────────────────────────────
+
+def admin_tariff_gifts_menu(tariff_id: int) -> dict:
+    return _kb([
+        [{"type": "callback", "text": "➕ Добавить бонусный файл", "payload": f"adm:tariff_gift_add:{tariff_id}"}],
+        [{"type": "callback", "text": "🗑 Удалить бонусный файл", "payload": f"adm:tariff_gift_del:{tariff_id}"}],
+        [{"type": "callback", "text": "🔙 Назад", "payload": f"adm:settings:{tariff_id}"}],
+    ])
+
+
+def admin_tariff_gift_wait_file(tariff_id: int) -> dict:
+    return _kb([
+        [{"type": "callback", "text": "🔙 Назад", "payload": f"adm:tariff_gifts:{tariff_id}"}],
+    ])
+
+
+def admin_tariff_gift_delete_list(gifts: list[dict], tariff_id: int) -> dict:
+    buttons = []
+    for g in gifts:
+        name = g.get("file_name") or f"Файл #{g['id']}"
+        date_str = g["created_at"].strftime("%d.%m.%Y") if g.get("created_at") else ""
+        label = f"🗑 {name}" + (f" ({date_str})" if date_str else "")
+        buttons.append([{
+            "type": "callback",
+            "text": label,
+            "payload": f"adm:tariff_gift_del_confirm:{g['id']}:{tariff_id}",
+        }])
+    buttons.append([{"type": "callback", "text": "🔙 Назад", "payload": f"adm:tariff_gifts:{tariff_id}"}])
+    return _kb(buttons)
 
 
 # ── Настройка цен ─────────────────────────────────────────────
@@ -362,6 +393,7 @@ def admin_broadcast_groups() -> dict:
         [{"type": "callback", "text": "👥 Всем пользователям", "payload": "adm:bc_all"}],
         [{"type": "callback", "text": "✅ Оплатили тариф", "payload": "adm:bc_paid"}],
         [{"type": "callback", "text": "🚫 Без подписки", "payload": "adm:bc_no_sub"}],
+        [{"type": "callback", "text": "💸 Нет платных подписок", "payload": "adm:bc_no_paid"}],
         [{"type": "callback", "text": "⏳ Вызвал оплату, но не оплатил тариф", "payload": "adm:bc_pending"}],
         [{"type": "callback", "text": "📦 Определённый тариф", "payload": "adm:bc_tariff"}],
         [{"type": "callback", "text": "🔙 Назад", "payload": "adm:settings_menu"}],
@@ -386,18 +418,20 @@ def admin_broadcast_cancel() -> dict:
     ])
 
 
-def admin_broadcast_button_picker(tariffs: list[dict]) -> dict:
+def admin_broadcast_button_picker(tariffs: list[dict], added_tariff_ids: set[int] | None = None) -> dict:
     """Выбор тарифа для кнопки в рассылке."""
+    added = added_tariff_ids or set()
     buttons = []
     for t in tariffs:
-        if t.get("is_active"):
+        if t.get("is_active") and t["id"] not in added:
             buttons.append([{
                 "type": "callback",
                 "text": t["name"],
                 "payload": f"adm:bc_btn_tariff:{t['id']}",
             }])
-    buttons.append([{"type": "callback", "text": "📨 Отправить без кнопки", "payload": "adm:bc_btn_none"}])
-    buttons.append([{"type": "callback", "text": "❌ Отмена", "payload": "adm:broadcast"}])
+    if not buttons:
+        buttons.append([{"type": "callback", "text": "Все тарифы уже добавлены", "payload": "adm:bc_add_btn_disabled"}])
+    buttons.append([{"type": "callback", "text": "🔙 Назад", "payload": "adm:bc_buttons_menu"}])
     return _kb(buttons)
 
 
@@ -459,7 +493,6 @@ def admin_transfer_tariff_list(tariffs: list[dict]) -> dict:
 def admin_feedback_actions(target_user_id: int) -> dict:
     return _kb([
         [{"type": "callback", "text": "✉️ Ответить", "payload": f"adm:reply_feedback:{target_user_id}"}],
-        [{"type": "link", "text": "💬 Перейти в чат с пользователем", "url": f"https://max.ru/chat/direct/{target_user_id}"}],
         [{"type": "callback", "text": "🚫 Забанить пользователя", "payload": f"adm:ban_user:{target_user_id}"}],
     ])
 
@@ -635,4 +668,36 @@ def admin_confirm_pay_delete(method_id: int) -> dict:
     return _kb([
         [{"type": "callback", "text": "⚠️ Да, удалить", "payload": f"adm:del_pay_confirm:{method_id}"}],
         [{"type": "callback", "text": "🔙 Отмена", "payload": f"adm:pay_detail:{method_id}"}],
+    ])
+
+
+# ── Добавление кнопок к рассылке ────────────────────────────────
+
+def admin_broadcast_add_buttons() -> dict:
+    """Первый выбор: какие кнопки добавить к рассылке."""
+    return _kb([
+        [{"type": "callback", "text": "🔗 Сторонняя ссылка", "payload": "adm:bc_add_btns:yes"}],
+        [{"type": "callback", "text": "💰 Кнопка тарифа", "payload": "adm:bc_add_btns:tariff"}],
+        [{"type": "callback", "text": "📨 Без кнопки", "payload": "adm:bc_add_btns:no"}],
+    ])
+
+
+def admin_broadcast_button_list(buttons_data: list[dict], can_add_more: bool = True) -> dict:
+    """Список добавленных кнопок: можно добавить ещё или отправить рассылку."""
+    buttons = []
+    if can_add_more:
+        buttons.append([{"type": "callback", "text": "➕ Сторонняя ссылка", "payload": "adm:bc_add_btn"}])
+        buttons.append([{"type": "callback", "text": "➕ Кнопка тарифа", "payload": "adm:bc_add_btns:tariff"}])
+    else:
+        buttons.append([{"type": "callback", "text": "➕ Максимум 5 кнопок", "payload": "adm:bc_add_btn_disabled"}])
+    buttons.append([{"type": "callback", "text": "✅ Отправить рассылку", "payload": "adm:bc_send_with_btns"}])
+    buttons.append([{"type": "callback", "text": "❌ Отмена", "payload": "adm:broadcast"}])
+
+    return _kb(buttons)
+
+
+def admin_broadcast_button_format_help() -> dict:
+    """Подсказка по формату кнопок."""
+    return _kb([
+        [{"type": "callback", "text": "🔙 Назад", "payload": "adm:broadcast"}],
     ])

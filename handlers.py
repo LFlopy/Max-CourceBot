@@ -10,6 +10,7 @@ import admin_keyboards as akb
 from admin_handlers import handle_admin_callback, handle_admin_message
 from fsm import set_state, get_state, clear_state, user_states
 import payments
+from utils import user_link
 
 
 # ── Форматирование продолжительности курса ───────────────────
@@ -57,11 +58,20 @@ def _format_course_duration(tariff: dict, expires_at=None) -> str:
 # ── Тексты (оферта — не редактируется через бота) ────────────
 
 OFERTA_TEXT = (
-    "ОФЕРТА И ДОГОВОР НА ПРОХОЖДЕНИЕ КУРСОВ.\n\n"
-    "Индивидуальный предприниматель предлагает лицам, полностью "
-    "оплатившим любую программу курсов, заключить Договор оферты "
-    "на следующих условиях 👇"
+    "Чунтонова Ольга Валерьевна, врач-диетолог-психолог,"
+    "приглашает Вас пройти регистрацию и ознакомиться с"
+    "условиями программ.\n\n"
+    "Нажимая «Согласен(а)», вы подтверждаете:\n"
+    "— ознакомление с договором оферты\n"
+    "— согласие с политикой конфиденциальности\n"
+    "— разрешение на обработку персональных данных\n\n"
+    "Нажмите «Согласен(а)», чтобы продолжить путь к здоровой и стройной фигуре.\n\n"
+    "ИП Чунтонова Ольга Валерьевна\n"
+    "ИНН: 343606860606\n"
+    "ОГРНИП: 323237500476410\n"
+    "Сертификат № 1118242295666\n"
 )
+
 
 
 # ── Вспомогательные ─────────────────────────────────────────
@@ -118,6 +128,22 @@ def _parse_duration_to_minutes(text: str) -> int | None:
     return None
 
 
+async def _get_visible_tariffs_for_user(user_id: int) -> list[dict]:
+    tariffs = await db.list_tariffs()
+    active_tariffs = [t for t in tariffs if t["is_active"]]
+    active_tariff_ids = await db.get_active_tariff_ids(user_id)
+    unlocked_tariff_ids = await db.get_unlocked_tariff_ids(user_id)
+    visible = db.filter_tariffs_by_allowed_group(active_tariffs, unlocked_tariff_ids)
+    return [t for t in visible if t["id"] not in active_tariff_ids]
+
+
+async def _user_can_view_tariff(user_id: int, tariff: dict) -> bool:
+    if not tariff or not tariff.get("is_active"):
+        return False
+    unlocked_tariff_ids = await db.get_unlocked_tariff_ids(user_id)
+    return bool(db.filter_tariffs_by_allowed_group([tariff], unlocked_tariff_ids))
+
+
 async def _activate_purchase(bot: MaxBot, purchase: dict):
     """Активирует покупку: добавляет в ресурсы, уведомляет."""
     user_id = purchase["user_id"]
@@ -158,7 +184,7 @@ async def _activate_purchase(bot: MaxBot, purchase: dict):
         )
 
     # Уведомляем пользователя
-    success_text = await db.get_bot_text("payment_success")
+    success_text = await db.get_bot_text("payment_success", user_id=user_id)
     duration_str = _format_course_duration(tariff_data, expires_at)
     if duration_str:
         success_text = f"{success_text}\n\n⏰ {duration_str}"
@@ -189,7 +215,7 @@ async def _activate_purchase(bot: MaxBot, purchase: dict):
 
     admin_text = (
         f"Новая подписка.\n\n"
-        f"Пользователь: {full_name}\n"
+        f"Пользователь: {user_link(full_name, user_id)}\n"
         f"ID: {user_id}\n"
         f"Тариф: {tariff_data['name'] if tariff_data else '—'}\n"
         f"Цена тарифа: {tariff_price:.0f}₽\n"
@@ -200,7 +226,7 @@ async def _activate_purchase(bot: MaxBot, purchase: dict):
     )
     for admin_id in ADMIN_IDS:
         try:
-            await bot.send_message(admin_id, admin_text)
+            await bot.send_message(admin_id, admin_text, fmt="markdown")
         except Exception:
             pass
 
@@ -211,16 +237,17 @@ async def _activate_purchase(bot: MaxBot, purchase: dict):
             try:
                 await bot.send_message(
                     admin_id,
-                    f"Пользователь {full_name}\n"
+                    f"Пользователь {user_link(full_name, user_id)}\n"
                     f"ID: {user_id}\n\n"
                     f"Вступил в {chat_title}",
+                    fmt="markdown",
                 )
             except Exception:
                 pass
 
     # Отправляем ссылки на ресурсы
     if resources:
-        links_text = await db.get_bot_text("activation_links")
+        links_text = await db.get_bot_text("activation_links", user_id=user_id)
         resources_with_links = [r for r in resources if r.get("invite_link")]
         if resources_with_links:
             await bot.send_message(
@@ -245,8 +272,10 @@ async def _activate_purchase(bot: MaxBot, purchase: dict):
                     links_text + "\n" + "\n".join(f"• {n}" for n in res_names),
                 )
 
-    btn = await db.get_button_texts()
-    await bot.send_message(user_id, "Выберите действие:", keyboard=kb.main_menu(user_id, btn=btn))
+    btn = await db.get_button_texts(user_id=user_id)
+    visible = await _get_visible_tariffs_for_user(user_id)
+    catalog_text = await db.get_bot_text("desc_catalog", user_id=user_id)
+    await bot.send_message(user_id, catalog_text, keyboard=kb.start_catalog(visible, user_id, btn=btn))
 
 
 async def _do_create_payment(bot: MaxBot, user_id: int, tariff_id: int,
@@ -305,18 +334,20 @@ async def _do_create_payment(bot: MaxBot, user_id: int, tariff_id: int,
         try:
             await bot.send_message(
                 admin_id,
-                f"Пользователь {full_name}\n"
+                f"Пользователь {user_link(full_name, user_id)}\n"
                 f"ID: {user_id}\n"
                 f"Вызвал оплату тарифа {tariff['name']}\n"
                 f"Способ оплаты {method['name']}\n"
                 f"Сумма: {final_price:.0f}₽",
+                fmt="markdown",
             )
         except Exception:
             pass
 
-    invoice_text = await db.get_bot_text("payment_invoice")
     await send_fn(
-        invoice_text.format(
+        await db.get_bot_text(
+            "payment_invoice",
+            user_id=user_id,
             tariff_name=tariff["name"],
             price=f"{final_price:.0f}",
             method_name=method["name"],
@@ -326,6 +357,18 @@ async def _do_create_payment(bot: MaxBot, user_id: int, tariff_id: int,
 
 
 # ── Хэндлеры ────────────────────────────────────────────────
+
+async def _send_welcome_catalog(bot: MaxBot, chat_id: int, user_id: int):
+    """Отправляет приветствие и каталог тарифов (вызывается после принятия оферты)."""
+    await bot.send_message(chat_id, await db.get_bot_text("welcome", user_id=user_id))
+    btn = await db.get_button_texts(user_id=user_id)
+    visible = await _get_visible_tariffs_for_user(user_id)
+    catalog_text = await db.get_bot_text("desc_catalog", user_id=user_id)
+    await bot.send_message(
+        chat_id, catalog_text,
+        keyboard=kb.start_catalog(visible, user_id, btn=btn),
+    )
+
 
 async def handle_start(bot: MaxBot, chat_id: int, sender: dict):
     """Команда /start или bot_started."""
@@ -366,28 +409,19 @@ async def handle_start(bot: MaxBot, chat_id: int, sender: dict):
             try:
                 await bot.send_message(
                     admin_id,
-                    f"🆕 Новый пользователь:\n{full_name}\n"
+                    f"🆕 Новый пользователь:\n{user_link(full_name, user_id)}\n"
                     f"ID: {user_id}",
+                    fmt="markdown",
                 )
             except Exception:
                 pass
 
-    # Приветствие
-    await bot.send_message(chat_id, await db.get_bot_text("welcome"))
+    # Если пользователь ещё не принял оферту — показываем экран согласия
+    if not await db.has_terms_agreed(user_id):
+        await bot.send_message(chat_id, OFERTA_TEXT, keyboard=kb.consent_buttons())
+        return
 
-    # Каталог тарифов + кнопка Личный кабинет
-    btn = await db.get_button_texts()
-    tariffs = await db.list_tariffs()
-    active = [t for t in tariffs if t["is_active"]]
-    user_tariff_ids = await db.get_active_tariff_ids(user_id)
-    visible = db.filter_tariffs_by_allowed_group(active, user_tariff_ids)
-    visible = [t for t in visible if t["id"] not in user_tariff_ids]
-
-    catalog_text = await db.get_bot_text("desc_catalog")
-    await bot.send_message(
-        chat_id, catalog_text,
-        keyboard=kb.start_catalog(visible, user_id, btn=btn),
-    )
+    await _send_welcome_catalog(bot, chat_id, user_id)
 
 
 async def handle_callback(bot: MaxBot, update: dict):
@@ -416,8 +450,20 @@ async def handle_callback(bot: MaxBot, update: dict):
         await handle_admin_callback(bot, update)
         return
 
+    # ── Согласие с офертой ───────────────────────────────
+    if payload == "agree_terms":
+        await db.set_terms_agreed(user_id)
+        await db.add_user_log(user_id, "Принял оферту и политику конфиденциальности")
+        await _send_welcome_catalog(bot, chat_id, user_id)
+        return
+
+    # Блокируем диалог до принятия оферты
+    if not await db.has_terms_agreed(user_id):
+        await bot.send_message(chat_id, OFERTA_TEXT, keyboard=kb.consent_buttons())
+        return
+
     # Загружаем тексты кнопок ЛК
-    btn = await db.get_button_texts()
+    btn = await db.get_button_texts(user_id=user_id)
 
     async def reply(text: str, keyboard=None):
         ok = await bot.edit_message(message_id, text, keyboard=keyboard)
@@ -427,7 +473,7 @@ async def handle_callback(bot: MaxBot, update: dict):
     # ── Главное меню ─────────────────────────────────────
     if payload == "back_main":
         clear_state(user_id)
-        cabinet_text = await db.get_bot_text("desc_cabinet")
+        cabinet_text = await db.get_bot_text("desc_cabinet", user_id=user_id)
         await reply(cabinet_text, keyboard=kb.main_menu(user_id, btn=btn))
 
     elif payload == "get_bonus":
@@ -448,13 +494,9 @@ async def handle_callback(bot: MaxBot, update: dict):
     # ── Курсы стройности ─────────────────────────────────
     elif payload == "courses" or payload == "back_courses":
         clear_state(user_id)
-        tariffs = await db.list_tariffs()
-        active = [t for t in tariffs if t["is_active"]]
-        user_tariff_ids = await db.get_active_tariff_ids(user_id)
-        visible = db.filter_tariffs_by_allowed_group(active, user_tariff_ids)
+        visible = await _get_visible_tariffs_for_user(user_id)
         # Убираем тарифы, на которые уже есть активная подписка
-        visible = [t for t in visible if t["id"] not in user_tariff_ids]
-        await reply(await db.get_bot_text("tariff_selection"), keyboard=kb.tariff_list(visible))
+        await reply(await db.get_bot_text("tariff_selection", user_id=user_id), keyboard=kb.tariff_list(visible))
 
     # ── Выбор тарифа ─────────────────────────────────────
     elif payload.startswith("tariff:"):
@@ -462,6 +504,9 @@ async def handle_callback(bot: MaxBot, update: dict):
         tariff_id = int(payload.split(":", 1)[1])
         tariff = await db.get_tariff(tariff_id)
         if not tariff:
+            return
+        if not await _user_can_view_tariff(user_id, tariff):
+            await reply("❌ Этот тариф вам недоступен.", keyboard=kb.main_menu(user_id, btn=btn))
             return
         # Проверяем, нет ли уже активной подписки
         user_tariff_ids = await db.get_active_tariff_ids(user_id)
@@ -493,6 +538,9 @@ async def handle_callback(bot: MaxBot, update: dict):
         tariff = await db.get_tariff(tariff_id)
         if not tariff:
             return
+        if not await _user_can_view_tariff(user_id, tariff):
+            await reply("❌ Этот тариф вам недоступен.", keyboard=kb.main_menu(user_id, btn=btn))
+            return
         user_tariff_ids = await db.get_active_tariff_ids(user_id)
         if tariff_id in user_tariff_ids:
             await reply("✅ У вас уже есть активная подписка на этот тариф.", keyboard=kb.main_menu(user_id, btn=btn))
@@ -500,9 +548,13 @@ async def handle_callback(bot: MaxBot, update: dict):
         price = await _calc_price(user_id, tariff)
         await db.add_user_log(user_id, f"Вызвал оплату тарифа «{tariff['name']}»")
         set_state(user_id, "waiting_promo", tariff_id=tariff_id, base_price=price)
-        promo_text = await db.get_bot_text("promo_activation")
         await reply(
-            promo_text.format(Название=tariff['name'], сумма=f"{price:.0f}₽"),
+            await db.get_bot_text(
+                "promo_activation",
+                user_id=user_id,
+                Название=tariff['name'],
+                сумма=f"{price:.0f}₽",
+            ),
             keyboard=kb.promo_input_cancel(tariff_id),
         )
 
@@ -611,9 +663,10 @@ async def handle_callback(bot: MaxBot, update: dict):
             except Exception:
                 pass
 
-        invoice_text = await db.get_bot_text("payment_invoice")
         await reply(
-            invoice_text.format(
+            await db.get_bot_text(
+                "payment_invoice",
+                user_id=user_id,
                 tariff_name=tariff["name"],
                 price=f"{final_price:.0f}",
                 method_name=method["name"],
@@ -640,7 +693,7 @@ async def handle_callback(bot: MaxBot, update: dict):
 
         method = await db.get_payment_method(purchase["payment_method_id"])
         if not method or not purchase.get("payment_id"):
-            processing_text = await db.get_bot_text("payment_processing")
+            processing_text = await db.get_bot_text("payment_processing", user_id=user_id)
             await reply(processing_text,
                         keyboard=kb.payment_created("https://max.ru", purchase_id, btn=btn))
             return
@@ -659,13 +712,13 @@ async def handle_callback(bot: MaxBot, update: dict):
         elif status == "canceled":
             await db.add_user_log(user_id, "Не оплатил (отмена)")
             await db.cancel_purchase(purchase_id)
-            failed_text = await db.get_bot_text("payment_failed")
+            failed_text = await db.get_bot_text("payment_failed", user_id=user_id)
             await reply(
                 failed_text,
                 keyboard=kb.main_menu(user_id, btn=btn),
             )
         else:
-            processing_text = await db.get_bot_text("payment_processing")
+            processing_text = await db.get_bot_text("payment_processing", user_id=user_id)
             await reply(
                 processing_text,
                 keyboard=kb.payment_created("https://max.ru", purchase_id, btn=btn),
@@ -676,6 +729,9 @@ async def handle_callback(bot: MaxBot, update: dict):
         tariff_id = int(payload.split(":", 1)[1])
         tariff = await db.get_tariff(tariff_id)
         if not tariff:
+            return
+        if not await _user_can_view_tariff(user_id, tariff):
+            await reply("❌ Этот тариф вам недоступен.", keyboard=kb.main_menu(user_id, btn=btn))
             return
         user_tariff_ids = await db.get_active_tariff_ids(user_id)
         if tariff_id in user_tariff_ids:
@@ -723,20 +779,24 @@ async def handle_callback(bot: MaxBot, update: dict):
                     pass
 
         resources_with_links = [r for r in resources if r.get("invite_link")]
-        free_text = await db.get_bot_text("free_activation_success")
+        free_text = await db.get_bot_text("free_activation_success", user_id=user_id)
         if resources_with_links:
             await reply(free_text, keyboard=kb.resource_links_buttons(resources_with_links))
         else:
             channel_link = tariff.get("channel_link") or "https://max.ru"
             await reply(free_text, keyboard=kb.channel_link_button(channel_link))
 
+        visible = await _get_visible_tariffs_for_user(user_id)
+        catalog_text = await db.get_bot_text("desc_catalog", user_id=user_id)
+        btn = await db.get_button_texts(user_id=user_id)
+        await bot.send_message(chat_id, catalog_text, keyboard=kb.start_catalog(visible, user_id, btn=btn))
+
     # ── Мои подписки ─────────────────────────────────────
     elif payload == "my_subs":
         subs = await db.get_active_subscriptions_with_resources(user_id)
-        pending = await db.get_pending_subscriptions(user_id)
-        if not subs and not pending:
+        if not subs:
             await reply(
-                await db.get_bot_text("no_active_subs"),
+                await db.get_bot_text("no_active_subs", user_id=user_id),
                 keyboard=kb.main_menu(user_id, btn=btn),
             )
         else:
@@ -750,15 +810,13 @@ async def handle_callback(bot: MaxBot, update: dict):
                 dur_str = _format_course_duration(fake_tariff, expires_at=s.get("expires_at"))
                 dur_line = f"\n   ⏰ {dur_str}" if dur_str else ""
                 lines.append(f"✅ {s['tariff_name']}{dur_line}")
-            for p in pending:
-                lines.append(f"⏳ {p['tariff_name']} — ожидает подтверждения оплаты")
             # Если подписки есть, но ни у одного ресурса нет invite_link — добавляем пояснение
             has_links = any(
                 res.get("invite_link", "").strip()
                 for s in subs
                 for res in s.get("resources", [])
             )
-            if subs and not has_links:
+            if not has_links:
                 lines.append("\n_Ссылки на ресурсы появятся здесь после их настройки._")
             await reply("\n".join(lines), keyboard=kb.my_subs_buttons(subs))
 
@@ -769,7 +827,7 @@ async def handle_callback(bot: MaxBot, update: dict):
     # ── Обратная связь ───────────────────────────────────
     elif payload == "feedback":
         set_state(user_id, "waiting_feedback")
-        await reply(await db.get_bot_text("feedback"), keyboard=kb.feedback_cancel())
+        await reply(await db.get_bot_text("feedback", user_id=user_id), keyboard=kb.feedback_cancel())
 
     # ── Отмена обратной связи ────────────────────────────
     elif payload == "cancel_feedback":
@@ -787,7 +845,7 @@ async def handle_message(bot: MaxBot, update: dict):
     user_id = int(sender.get("user_id", 0))
     chat_id = int(recipient.get("chat_id") or user_id)
 
-    btn = await db.get_button_texts()
+    btn = await db.get_button_texts(user_id=user_id)
 
     # ── Обработка контакта (сбор телефонов) ───────────────
     attachments = body.get("attachments", [])
@@ -807,6 +865,11 @@ async def handle_message(bot: MaxBot, update: dict):
     # /start
     if text.startswith("/start"):
         await handle_start(bot, chat_id, sender)
+        return
+
+    # Блокируем диалог до принятия оферты
+    if not await db.has_terms_agreed(user_id):
+        await bot.send_message(chat_id, OFERTA_TEXT, keyboard=kb.consent_buttons())
         return
 
     # FSM: админ-состояния
@@ -906,7 +969,7 @@ async def handle_message(bot: MaxBot, update: dict):
 
         display_text = text or "(медиа вложение)"
         feedback_text = (
-            f"Пользователь: **{full_name}**\n"
+            f"Пользователь: {user_link(full_name, user_id)}\n"
             f"ID: **{user_id}**\n"
             f"Оставил запрос: {display_text}"
         )
@@ -915,6 +978,7 @@ async def handle_message(bot: MaxBot, update: dict):
                 admin_id,
                 feedback_text,
                 keyboard=akb.admin_feedback_actions(user_id),
+                fmt="markdown",
             )
             # Пересылаем вложения (фото, файлы и т.д.) администратору
             for att in media_atts:
@@ -925,7 +989,7 @@ async def handle_message(bot: MaxBot, update: dict):
 
         await bot.send_message(
             chat_id,
-            "✅ Ваше сообщение отправлено! Мы ответим, как освободимся.",
+            "✅ Ваше сообщение отправлено! Ольга Валерьевна ответит, как освободится.",
             keyboard=kb.main_menu(user_id, btn=btn),
         )
         return
@@ -935,5 +999,6 @@ async def handle_message(bot: MaxBot, update: dict):
         await bot.send_message(chat_id, "⛔ Вы заблокированы.")
         return
 
-    # Любое другое сообщение — показываем меню
-    await bot.send_message(chat_id, "Выберите действие:", keyboard=kb.main_menu(user_id, btn=btn))
+    # Любое другое сообщение — подсказываем как написать через обратную связь
+    unknown_text = await db.get_bot_text("unknown_message", user_id=user_id)
+    await bot.send_message(chat_id, unknown_text, keyboard=kb.main_menu(user_id, btn=btn))
