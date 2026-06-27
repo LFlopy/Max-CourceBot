@@ -594,6 +594,25 @@ async def get_users_without_tariffs(excluded_tariff_ids: list[int]) -> list[int]
         return [r["user_id"] for r in rows]
 
 
+async def get_users_without_tariffs(excluded_tariff_ids: list[int]) -> list[int]:
+    """Пользователи БЕЗ активной подписки на указанные тарифы (исключённые)."""
+    if not excluded_tariff_ids:
+        return await get_all_user_ids()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT u.user_id FROM users u
+            WHERE u.is_banned = FALSE
+              AND u.user_id NOT IN (
+                  SELECT DISTINCT p.user_id FROM purchases p
+                  JOIN tariffs t ON t.id = p.tariff_id
+                  WHERE p.tariff_id = ANY($1::int[])
+                    AND p.status = 'active'
+                    AND (p.expires_at IS NULL OR p.expires_at > NOW())
+              )
+        """, excluded_tariff_ids)
+        return [r["user_id"] for r in rows]
+
+
 # ── Покупки ────────────────────────────────────────────────────
 
 async def create_purchase(user_id: int, tariff_id: int,
