@@ -1034,6 +1034,58 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
             keyboard=akb.admin_broadcast_tariff_list(tariffs),
         )
 
+    # ── Рассылка: всем кроме тарифа ────────────────────────
+    elif payload == "adm:bc_all_except":
+        selected_excluded = set()
+        set_state(user_id, "adm_bc_excluded_pick", excluded_tariffs=selected_excluded)
+        tariffs = await db.list_tariffs()
+        await reply(
+            "📮 Выберите тарифы ПОДПИСЧИКАМ КОТОРЫХ не будет отправлена рассылка:\n\n"
+            "Рассылка будет отправлена всем пользователям, кроме отмеченных.",
+            keyboard=akb.admin_broadcast_excluded_tariff_list(tariffs, selected_excluded),
+        )
+
+    elif payload.startswith("adm:bc_excluded_toggle:"):
+        tid = int(payload.split(":")[2])
+        state_data = user_states.get(user_id, {})
+        selected: set[int] = state_data.get("excluded_tariffs", set())
+        if tid in selected:
+            selected.discard(tid)
+        else:
+            selected.add(tid)
+        state_data["excluded_tariffs"] = selected
+        tariffs = await db.list_tariffs()
+        await reply(
+            "📮 Выберите тарифы ПОДПИСЧИКАМ КОТОРЫХ не будет отправлена рассылка:\n\n"
+            "Рассылка будет отправлена всем пользователям, кроме отмеченных.",
+            keyboard=akb.admin_broadcast_excluded_tariff_list(tariffs, selected),
+        )
+
+    elif payload == "adm:bc_excluded_next":
+        state_data = user_states.get(user_id, {})
+        excluded: set[int] = state_data.get("excluded_tariffs", set())
+        if not excluded:
+            await reply(
+                "⚠️ Выберите хотя бы один тариф для исключения.",
+                keyboard=akb.admin_broadcast_excluded_tariff_list(
+                    await db.list_tariffs(), excluded
+                ),
+            )
+            return True
+        # Сохраняем и переходим к вводу текста
+        set_state(user_id, "adm_broadcast",
+                  bc_group="excluded", bc_excluded_tariffs=excluded)
+        tariff_names = []
+        for tid in excluded:
+            t = await db.get_tariff(tid)
+            if t:
+                tariff_names.append(t["name"])
+        await reply(
+            f"Группа: **Всем кроме** «{', '.join(tariff_names)}»\n\n"
+            "Отправьте текст рассылки (можно прикрепить изображение или файл):",
+            keyboard=akb.admin_broadcast_cancel(),
+        )
+
     elif payload.startswith("adm:bc_tariff_pick:"):
         tid = int(payload.split(":")[2])
         tariff = await db.get_tariff(tid)
@@ -1047,6 +1099,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         sd = user_states.get(user_id, {})
         bc_group = sd.get("bc_group", "all")
         bc_tariff_id = sd.get("bc_tariff_id")
+        bc_excluded = sd.get("bc_excluded_tariffs", set())
         bc_text = sd.get("bc_text", "")
         bc_media = sd.get("bc_media", [])
         clear_state(user_id)
@@ -1062,6 +1115,8 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
             user_ids = await db.get_pending_user_ids()
         elif bc_group == "tariff" and bc_tariff_id:
             user_ids = await db.get_tariff_user_ids(bc_tariff_id)
+        elif bc_group == "excluded" and bc_excluded:
+            user_ids = await db.get_users_without_tariffs(list(bc_excluded))
         else:
             user_ids = []
         sent = 0
@@ -1138,6 +1193,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         sd = user_states.get(user_id, {})
         bc_group = sd.get("bc_group", "all")
         bc_tariff_id = sd.get("bc_tariff_id")
+        bc_excluded = sd.get("bc_excluded_tariffs", set())
         bc_text = sd.get("bc_text", "")
         bc_media = sd.get("bc_media", [])
         clear_state(user_id)
@@ -1153,6 +1209,8 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
             user_ids = await db.get_pending_user_ids()
         elif bc_group == "tariff" and bc_tariff_id:
             user_ids = await db.get_tariff_user_ids(bc_tariff_id)
+        elif bc_group == "excluded" and bc_excluded:
+            user_ids = await db.get_users_without_tariffs(list(bc_excluded))
         else:
             user_ids = []
         sent = 0
@@ -1196,6 +1254,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         sd = user_states.get(user_id, {})
         bc_group = sd.get("bc_group", "all")
         bc_tariff_id = sd.get("bc_tariff_id")
+        bc_excluded = sd.get("bc_excluded_tariffs", set())
         bc_text = sd.get("bc_text", "")
         bc_media = sd.get("bc_media", [])
         bc_buttons = sd.get("bc_buttons", [])
@@ -1216,6 +1275,8 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
             user_ids = await db.get_pending_user_ids()
         elif bc_group == "tariff" and bc_tariff_id:
             user_ids = await db.get_tariff_user_ids(bc_tariff_id)
+        elif bc_group == "excluded" and bc_excluded:
+            user_ids = await db.get_users_without_tariffs(list(bc_excluded))
         else:
             user_ids = []
         
