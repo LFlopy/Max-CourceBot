@@ -1078,6 +1078,11 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
                 sent += 1
             except Exception:
                 pass
+        # Уведомляем админа о количестве получателей
+        await bot.send_message(
+            chat_id,
+            f"Рассылка завершена.\nОбъявление получили {sent} пользователей.",
+        )
         await reply(
             f"✅ Рассылка завершена.\nОтправлено: **{sent}** из **{len(user_ids)}** пользователей.",
             keyboard=akb.admin_bot_settings(),
@@ -1169,6 +1174,11 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
                 sent += 1
             except Exception:
                 pass
+        # Уведомляем админа о количестве получателей
+        await bot.send_message(
+            chat_id,
+            f"Рассылка завершена.\nОбъявление получили {sent} пользователей.",
+        )
         await reply(
             f"✅ Рассылка завершена.\nОтправлено: **{sent}** из **{len(user_ids)}** пользователей.",
             keyboard=akb.admin_bot_settings(),
@@ -1234,6 +1244,12 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
                 sent += 1
             except Exception:
                 pass
+        
+        # Уведомляем админа о количестве получателей
+        await bot.send_message(
+            chat_id,
+            f"Рассылка завершена.\nОбъявление получили {sent} пользователей.",
+        )
         
         await reply(
             f"✅ Рассылка завершена.\nОтправлено: **{sent}** из **{len(user_ids)}** пользователей.",
