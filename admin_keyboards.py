@@ -434,7 +434,6 @@ def admin_broadcast_tariff_list(tariffs: list[dict]) -> dict:
 def admin_broadcast_cancel() -> dict:
     return _kb([
         [{"type": "callback", "text": "❌ Отмена", "payload": "adm:broadcast"}],
-        [{"type": "callback", "text": "👥 Кол-во получателей", "payload": "adm:bc_view_count"}],
     ])
 
 
