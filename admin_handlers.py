@@ -2057,6 +2057,48 @@ async def handle_admin_message(
         await _send_tariff_settings(bot, chat_id, tariff)
         return True
 
+    # ── Рассылка: ввод текста (включая режим "всем кроме") ──────
+    if state == "adm_bc_text_input":
+        sd = user_states.get(user_id, {})
+        bc_text = sd.get("bc_text", "")
+        bc_media = sd.get("bc_media", [])
+        
+        # Если есть вложения — сохраняем их
+        if attachments:
+            for att in attachments:
+                if isinstance(att, dict):
+                    file_type = att.get("type", "")
+                    token = att.get("payload", {}).get("token") or att.get("payload", {}).get("file_token")
+                    name = att.get("payload", {}).get("name") or att.get("payload", {}).get("file_name")
+                    if file_type and token:
+                        bc_media.append({"type": file_type, "token": token, "name": name})
+        
+        # Сохраняем текст
+        new_text = text.strip()
+        if not new_text and not attachments:
+            await bot.send_message(chat_id, "Введите текст рассылки или приложите медиа.")
+            return True
+        bc_text = new_text or bc_text
+        
+        # Обновляем состояние
+        sd["bc_text"] = bc_text
+        sd["bc_media"] = bc_media
+        
+        # Если уже есть кнопки — сразу отправляем
+        buttons = sd.get("bc_buttons", [])
+        if buttons and len(buttons) > 0:
+            await _send_broadcast_with_buttons(bot, chat_id, user_id, sd)
+            return True
+        
+        # Показываем выбор: отправить без кнопок или добавить кнопки
+        await bot.send_message(
+            chat_id,
+            "Текст сохранён. ✍️\n\n" +
+            ("Хотите добавить кнопку к рассылке?" if not buttons else "Добавить ещё одну кнопку?"),
+            keyboard=akb.admin_broadcast_add_buttons(),
+        )
+        return True
+    
     # ── Редактирование: название в чеке ───────────────────
     if state == "adm_edit_check_name":
         tid = state_data.get("tariff_id")
