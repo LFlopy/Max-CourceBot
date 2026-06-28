@@ -634,7 +634,7 @@ async def count_tariff_user_ids(tariff_id: int) -> int:
 
 async def get_subscribed_excluding_tariffs_user_ids(excluded_tariff_ids: list[int]) -> list[int]:
     """Пользователи с активной подпиской НЕ на указанные тарифы.
-    Если excluded_tariff_ids пуст — возвращает всех подписчиков (аналог get_paid_user_ids,
+    Если excluded_tariff_ids пуст - возвращает всех подписчиков (аналог get_paid_user_ids,
     но без DISTINCT, что может дать дубли при нескольких активных подписках).
     """
     async with pool.acquire() as conn:
@@ -668,7 +668,7 @@ async def get_subscribed_excluding_tariffs_user_ids(excluded_tariff_ids: list[in
 
 async def count_subscribed_excluding_tariffs_user_ids(excluded_tariff_ids: list[int]) -> int:
     """Количество пользователей с активной подпиской НЕ на указанные тарифы.
-    Если excluded_tariff_ids пуст — возвращает всех подписчиков (аналог get_paid_user_ids,
+    Если excluded_tariff_ids пуст - возвращает всех подписчиков (аналог get_paid_user_ids,
     но без DISTINCT, что может дать дубли при нескольких активных подписках).
     """
     async with pool.acquire() as conn:
