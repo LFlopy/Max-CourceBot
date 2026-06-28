@@ -500,6 +500,12 @@ async def get_all_user_ids() -> list[int]:
         return [r["user_id"] for r in rows]
 
 
+async def count_all_user_ids() -> int:
+    """Количество всех пользователей (без заблокированных)."""
+    async with pool.acquire() as conn:
+        return await conn.fetchval("SELECT COUNT(*) FROM users WHERE is_banned = FALSE")
+
+
 async def get_paid_user_ids() -> list[int]:
     """Пользователи, оплатившие хотя бы один тариф."""
     async with pool.acquire() as conn:
@@ -511,6 +517,16 @@ async def get_paid_user_ids() -> list[int]:
         return [r["user_id"] for r in rows]
 
 
+async def count_paid_user_ids() -> int:
+    """Количество пользователей, оплативших хотя бы один тариф."""
+    async with pool.acquire() as conn:
+        return await conn.fetchval("""
+            SELECT COUNT(DISTINCT u.user_id) FROM users u
+            JOIN purchases p ON p.user_id = u.user_id
+            WHERE p.status = 'active' AND u.is_banned = FALSE
+        """)
+
+
 async def get_no_sub_user_ids() -> list[int]:
     """Пользователи без единой покупки."""
     async with pool.acquire() as conn:
@@ -520,6 +536,16 @@ async def get_no_sub_user_ids() -> list[int]:
             WHERE p.id IS NULL AND u.is_banned = FALSE
         """)
         return [r["user_id"] for r in rows]
+
+
+async def count_no_sub_user_ids() -> int:
+    """Количество пользователей без единой покупки."""
+    async with pool.acquire() as conn:
+        return await conn.fetchval("""
+            SELECT COUNT(u.user_id) FROM users u
+            LEFT JOIN purchases p ON p.user_id = u.user_id
+            WHERE p.id IS NULL AND u.is_banned = FALSE
+        """)
 
 
 async def get_no_paid_sub_user_ids() -> list[int]:
@@ -537,6 +563,20 @@ async def get_no_paid_sub_user_ids() -> list[int]:
         return [r["user_id"] for r in rows]
 
 
+async def count_no_paid_sub_user_ids() -> int:
+    """Количество пользователей без активных платных подписок."""
+    async with pool.acquire() as conn:
+        return await conn.fetchval("""
+            SELECT COUNT(*) FROM users u
+            WHERE u.is_banned = FALSE
+              AND u.user_id NOT IN (
+                  SELECT DISTINCT p.user_id FROM purchases p
+                  JOIN tariffs t ON t.id = p.tariff_id
+                  WHERE p.status = 'active' AND t.is_free = FALSE
+              )
+        """)
+
+
 async def get_pending_user_ids() -> list[int]:
     """Пользователи с pending-покупками (начали, но не оплатили)."""
     async with pool.acquire() as conn:
@@ -551,6 +591,19 @@ async def get_pending_user_ids() -> list[int]:
         return [r["user_id"] for r in rows]
 
 
+async def count_pending_user_ids() -> int:
+    """Количество пользователей с pending-покупками (начали, но не оплатили)."""
+    async with pool.acquire() as conn:
+        return await conn.fetchval("""
+            SELECT COUNT(DISTINCT u.user_id) FROM users u
+            JOIN purchases p ON p.user_id = u.user_id
+            WHERE p.status = 'pending' AND u.is_banned = FALSE
+              AND u.user_id NOT IN (
+                  SELECT user_id FROM purchases WHERE status = 'active'
+              )
+        """)
+
+
 async def get_tariff_user_ids(tariff_id: int) -> list[int]:
     """Пользователи с активной подпиской на конкретный тариф."""
     async with pool.acquire() as conn:
@@ -562,6 +615,18 @@ async def get_tariff_user_ids(tariff_id: int) -> list[int]:
               AND u.is_banned = FALSE
         """, tariff_id)
         return [r["user_id"] for r in rows]
+
+
+async def count_tariff_user_ids(tariff_id: int) -> int:
+    """Количество пользователей с активной подпиской на конкретный тариф."""
+    async with pool.acquire() as conn:
+        return await conn.fetchval("""
+            SELECT COUNT(DISTINCT u.user_id) FROM users u
+            JOIN purchases p ON p.user_id = u.user_id
+            WHERE p.tariff_id = $1 AND p.status = 'active'
+              AND (p.expires_at IS NULL OR p.expires_at > NOW())
+              AND u.is_banned = FALSE
+        "", tariff_id)
 
 
 # ── Покупки ────────────────────────────────────────────────────
@@ -599,6 +664,39 @@ async def get_subscribed_excluding_tariffs_user_ids(excluded_tariff_ids: list[in
                   AND u.is_banned = FALSE
             """)
         return [r["user_id"] for r in rows]
+
+
+async def count_subscribed_excluding_tariffs_user_ids(excluded_tariff_ids: list[int]) -> int:
+    """Количество пользователей с активной подпиской НЕ на указанные тарифы.
+    Если excluded_tariff_ids пуст — возвращает всех подписчиков (аналог get_paid_user_ids,
+    но без DISTINCT, что может дать дубли при нескольких активных подписках).
+    """
+    async with pool.acquire() as conn:
+        if excluded_tariff_ids:
+            # Исключаем пользователей с активными подписками на указанные тарифы
+            return await conn.fetchval("""
+                SELECT COUNT(DISTINCT u.user_id) FROM users u
+                JOIN purchases p ON p.user_id = u.user_id
+                WHERE p.status = 'active'
+                  AND (p.expires_at IS NULL OR p.expires_at > NOW())
+                  AND NOT EXISTS (
+                      SELECT 1 FROM purchases p2
+                      WHERE p2.user_id = p.user_id
+                        AND p2.tariff_id = ANY($1::int[])
+                        AND p2.status = 'active'
+                        AND (p2.expires_at IS NULL OR p2.expires_at > NOW())
+                  )
+                  AND u.is_banned = FALSE
+            "", excluded_tariff_ids)
+        else:
+            # Все подписчики без исключения
+            return await conn.fetchval("""
+                SELECT COUNT(DISTINCT u.user_id) FROM users u
+                JOIN purchases p ON p.user_id = u.user_id
+                WHERE p.status = 'active'
+                  AND (p.expires_at IS NULL OR p.expires_at > NOW())
+                  AND u.is_banned = FALSE
+            """)
 
 
 async def create_purchase(user_id: int, tariff_id: int,

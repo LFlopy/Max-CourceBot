@@ -994,36 +994,41 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
 
     elif payload == "adm:bc_all":
         set_state(user_id, "adm_broadcast", bc_group="all")
+        count = await db.count_all_user_ids()
         await reply(
-            "Группа: **Все пользователи**\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
+            f"Группа: **Все пользователи** ({count} чел.)\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
             keyboard=akb.admin_broadcast_cancel(),
         )
 
     elif payload == "adm:bc_paid":
         set_state(user_id, "adm_broadcast", bc_group="paid")
+        count = await db.count_paid_user_ids()
         await reply(
-            "Группа: **Оплатили тариф**\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
+            f"Группа: **Оплатили тариф** ({count} чел.)\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
             keyboard=akb.admin_broadcast_cancel(),
         )
 
     elif payload == "adm:bc_no_sub":
         set_state(user_id, "adm_broadcast", bc_group="no_sub")
+        count = await db.count_no_sub_user_ids()
         await reply(
-            "Группа: **Без подписки**\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
+            f"Группа: **Без подписки** ({count} чел.)\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
             keyboard=akb.admin_broadcast_cancel(),
         )
 
     elif payload == "adm:bc_no_paid":
         set_state(user_id, "adm_broadcast", bc_group="no_paid")
+        count = await db.count_no_paid_sub_user_ids()
         await reply(
-            "Группа: **Нет платных подписок**\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
+            f"Группа: **Нет платных подписок** ({count} чел.)\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
             keyboard=akb.admin_broadcast_cancel(),
         )
 
     elif payload == "adm:bc_pending":
         set_state(user_id, "adm_broadcast", bc_group="pending")
+        count = await db.count_pending_user_ids()
         await reply(
-            "Группа: **Вызвал оплату, но не оплатил**\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
+            f"Группа: **Вызвал оплату, но не оплатил** ({count} чел.)\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
             keyboard=akb.admin_broadcast_cancel(),
         )
 
@@ -1038,8 +1043,9 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         tid = int(payload.split(":")[2])
         tariff = await db.get_tariff(tid)
         set_state(user_id, "adm_broadcast", bc_group="tariff", bc_tariff_id=tid)
+        count = await db.count_tariff_user_ids(tid)
         await reply(
-            f"Группа: **подписчики «{tariff['name']}»**\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
+            f"Группа: **подписчики «{tariff['name']}» ({count} чел.)**\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
             keyboard=akb.admin_broadcast_cancel(),
         )
 
@@ -1074,8 +1080,9 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         excluded_ids = list(sd.get("selected_ids", []))
         clear_state(user_id)
         set_state(user_id, "adm_broadcast", bc_group="exclude", bc_excluded_ids=excluded_ids)
+        count = await db.count_subscribed_excluding_tariffs_user_ids(excluded_ids)
         await reply(
-            "Группа: **Всем кроме выбранных тарифов**\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
+            f"Группа: **Всем кроме выбранных тарифов ({count} чел.)**\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
             keyboard=akb.admin_broadcast_cancel(),
         )
 
