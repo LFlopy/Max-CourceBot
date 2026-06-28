@@ -396,8 +396,26 @@ def admin_broadcast_groups() -> dict:
         [{"type": "callback", "text": "💸 Нет платных подписок", "payload": "adm:bc_no_paid"}],
         [{"type": "callback", "text": "⏳ Вызвал оплату, но не оплатил тариф", "payload": "adm:bc_pending"}],
         [{"type": "callback", "text": "📦 Определённый тариф", "payload": "adm:bc_tariff"}],
+        [{"type": "callback", "text": "🚷 Всем кроме тарифов", "payload": "adm:bc_exclude"}],
         [{"type": "callback", "text": "🔙 Назад", "payload": "adm:settings_menu"}],
     ])
+
+
+
+
+def admin_broadcast_exclude_tariff_picker(tariffs: list[dict], selected_ids: set[int]) -> dict:
+    """Выбор тарифов для исключения из рассылки (чекбоксы)."""
+    buttons: list[list[dict]] = []
+    for t in tariffs:
+        icon = "✅" if t["id"] in selected_ids else "⬜"
+        buttons.append([{
+            "type": "callback",
+            "text": f"{icon} {t['name']}",
+            "payload": f"adm:bc_exclude_toggle:{t['id']}",
+        }])
+    buttons.append([{"type": "callback", "text": "➡️ Продолжить", "payload": "adm:bc_exclude_done"}])
+    buttons.append([{"type": "callback", "text": "🔙 Назад", "payload": "adm:broadcast"}])
+    return _kb(buttons)
 
 
 def admin_broadcast_tariff_list(tariffs: list[dict]) -> dict:

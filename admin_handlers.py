@@ -1043,6 +1043,42 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
             keyboard=akb.admin_broadcast_cancel(),
         )
 
+
+
+    elif payload == "adm:bc_exclude":
+        tariffs = await db.list_tariffs()
+        set_state(user_id, "adm_bc_exclude_pick", selected_ids=set(), bc_group="exclude")
+        await reply(
+            "Выберите тарифы для исключения из рассылки:",
+            keyboard=akb.admin_broadcast_exclude_tariff_picker(tariffs, set()),
+        )
+
+    elif payload.startswith("adm:bc_exclude_toggle:"):
+        tid = int(payload.split(":")[2])
+        sd = user_states.get(user_id, {})
+        selected = sd.get("selected_ids", set())
+        if tid in selected:
+            selected.discard(tid)
+        else:
+            selected.add(tid)
+        state_data = user_states.get(user_id, {})
+        state_data["selected_ids"] = selected
+        tariffs = await db.list_tariffs()
+        await reply(
+            "Выберите тарифы для исключения из рассылки:",
+            keyboard=akb.admin_broadcast_exclude_tariff_picker(tariffs, selected),
+        )
+
+    elif payload == "adm:bc_exclude_done":
+        sd = user_states.get(user_id, {})
+        excluded_ids = list(sd.get("selected_ids", []))
+        clear_state(user_id)
+        set_state(user_id, "adm_broadcast", bc_group="exclude", bc_excluded_ids=excluded_ids)
+        await reply(
+            "Группа: **Всем кроме выбранных тарифов**\n\nОтправьте текст рассылки (можно прикрепить изображение или файл):",
+            keyboard=akb.admin_broadcast_cancel(),
+        )
+
     elif payload == "adm:bc_btn_none":
         sd = user_states.get(user_id, {})
         bc_group = sd.get("bc_group", "all")
@@ -1062,6 +1098,9 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
             user_ids = await db.get_pending_user_ids()
         elif bc_group == "tariff" and bc_tariff_id:
             user_ids = await db.get_tariff_user_ids(bc_tariff_id)
+        elif bc_group == "exclude":
+            excluded_ids = sd.get("bc_excluded_ids", []) if isinstance(sd, dict) else []
+            user_ids = await db.get_subscribed_excluding_tariffs_user_ids(excluded_ids)
         else:
             user_ids = []
         sent = 0
@@ -1089,6 +1128,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         set_state(user_id, "adm_broadcast_wait_input_button",
                   bc_group=sd.get("bc_group"),
                   bc_tariff_id=sd.get("bc_tariff_id"),
+                  bc_excluded_ids=sd.get("bc_excluded_ids"),
                   bc_text=sd.get("bc_text"),
                   bc_media=sd.get("bc_media"),
                   bc_buttons=sd.get("bc_buttons", []))
@@ -1153,6 +1193,9 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
             user_ids = await db.get_pending_user_ids()
         elif bc_group == "tariff" and bc_tariff_id:
             user_ids = await db.get_tariff_user_ids(bc_tariff_id)
+        elif bc_group == "exclude":
+            excluded_ids = sd.get("bc_excluded_ids", []) if isinstance(sd, dict) else []
+            user_ids = await db.get_subscribed_excluding_tariffs_user_ids(excluded_ids)
         else:
             user_ids = []
         sent = 0
@@ -1179,6 +1222,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         set_state(user_id, "adm_broadcast_wait_input_button",
                   bc_group=sd.get("bc_group"),
                   bc_tariff_id=sd.get("bc_tariff_id"),
+                  bc_excluded_ids=sd.get("bc_excluded_ids"),
                   bc_text=sd.get("bc_text"),
                   bc_media=sd.get("bc_media"),
                   bc_buttons=sd.get("bc_buttons", []))
@@ -1216,6 +1260,9 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
             user_ids = await db.get_pending_user_ids()
         elif bc_group == "tariff" and bc_tariff_id:
             user_ids = await db.get_tariff_user_ids(bc_tariff_id)
+        elif bc_group == "exclude":
+            excluded_ids = sd.get("bc_excluded_ids", []) if isinstance(sd, dict) else []
+            user_ids = await db.get_subscribed_excluding_tariffs_user_ids(excluded_ids)
         else:
             user_ids = []
         
@@ -2223,6 +2270,7 @@ async def handle_admin_message(
     if state == "adm_broadcast":
         bc_group = state_data.get("bc_group", "all")
         bc_tariff_id = state_data.get("bc_tariff_id")
+        bc_excluded_ids = state_data.get("bc_excluded_ids", [])
         bc_media = [
             {"type": att.get("type"), "token": att.get("payload", {}).get("token")}
             for att in (attachments or [])
@@ -2230,7 +2278,7 @@ async def handle_admin_message(
             and att.get("payload", {}).get("token")
         ]
         set_state(user_id, "adm_broadcast_add_buttons",
-                  bc_group=bc_group, bc_tariff_id=bc_tariff_id, bc_text=text, bc_media=bc_media, bc_buttons=[])
+                  bc_group=bc_group, bc_tariff_id=bc_tariff_id, bc_excluded_ids=bc_excluded_ids, bc_text=text, bc_media=bc_media, bc_buttons=[])
         await bot.send_message(
             chat_id,
             "➕ Добавить кнопки к рассылке?\n\n"
@@ -2270,6 +2318,7 @@ async def handle_admin_message(
         set_state(user_id, "adm_broadcast_buttons_added",
                   bc_group=state_data.get("bc_group"),
                   bc_tariff_id=state_data.get("bc_tariff_id"),
+                  bc_excluded_ids=state_data.get("bc_excluded_ids"),
                   bc_text=state_data.get("bc_text"),
                   bc_media=state_data.get("bc_media"),
                   bc_buttons=buttons)
