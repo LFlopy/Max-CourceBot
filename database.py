@@ -626,7 +626,7 @@ async def count_tariff_user_ids(tariff_id: int) -> int:
             WHERE p.tariff_id = $1 AND p.status = 'active'
               AND (p.expires_at IS NULL OR p.expires_at > NOW())
               AND u.is_banned = FALSE
-        "", tariff_id)
+        """, tariff_id)
 
 
 # ── Покупки ────────────────────────────────────────────────────
@@ -687,7 +687,7 @@ async def count_subscribed_excluding_tariffs_user_ids(excluded_tariff_ids: list[
                         AND (p2.expires_at IS NULL OR p2.expires_at > NOW())
                   )
                   AND u.is_banned = FALSE
-            "", excluded_tariff_ids)
+            """, excluded_tariff_ids)
         else:
             # Все подписчики без исключения
             return await conn.fetchval("""
