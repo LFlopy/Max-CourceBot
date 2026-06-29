@@ -811,7 +811,7 @@ async def handle_callback(bot: MaxBot, update: dict):
             channel_link = tariff.get("channel_link") or "https://max.ru"
             await reply(free_text, keyboard=kb.channel_link_button(channel_link))
         else:
-                await reply(free_text)
+            await reply(free_text)
 
         visible = await _get_visible_tariffs_for_user(user_id)
         catalog_text = await db.get_bot_text("desc_catalog", user_id=user_id)
