@@ -807,9 +807,8 @@ async def handle_callback(bot: MaxBot, update: dict):
         channel_link = tariff.get("channel_link")
         if resources_with_links:
             await reply(free_text, keyboard=kb.resource_links_buttons(resources_with_links))
-        else:
-            channel_link = tariff.get("channel_link") or "https://max.ru"
-            await reply(free_text, keyboard=kb.channel_link_button(channel_link))
+        elif tariff.get("channel_link"):
+            await reply(free_text, keyboard=kb.channel_link_button(tariff.get("channel_link")))
         else:
             await reply(free_text)
 
