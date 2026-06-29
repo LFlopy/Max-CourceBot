@@ -804,13 +804,15 @@ async def handle_callback(bot: MaxBot, update: dict):
         bonus_kb_param = tariff_id if has_bonus else None
         resources_with_links = [r for r in resources if r.get("invite_link")]
         free_text = await db.get_bot_text("free_activation_success", user_id=user_id)
+        channel_link = tariff.get("channel_link")
         if resources_with_links:
             await reply(free_text, keyboard=kb.resource_links_buttons(resources_with_links,
                                                                        bonus_tariff_id=bonus_kb_param))
-        else:
-            channel_link = tariff.get("channel_link") or "https://max.ru"
+        elif channel_link:
             await reply(free_text, keyboard=kb.channel_link_button(channel_link,
                                                                    bonus_tariff_id=bonus_kb_param))
+        else:
+            await reply(free_text)
 
         visible = await _get_visible_tariffs_for_user(user_id)
         catalog_text = await db.get_bot_text("desc_catalog", user_id=user_id)
