@@ -806,9 +806,14 @@ async def handle_callback(bot: MaxBot, update: dict):
         free_text = await db.get_bot_text("free_activation_success", user_id=user_id)
         channel_link = tariff.get("channel_link")
         if resources_with_links:
-            await reply(free_text, keyboard=kb.resource_links_buttons(resources_with_links))
-        elif tariff.get("channel_link"):
-            await reply(free_text, keyboard=kb.channel_link_button(tariff.get("channel_link")))
+            await reply(free_text, keyboard=kb.resource_links_buttons(resources_with_links, bonus_tariff_id=bonus_kb_param))
+        elif channel_link:
+            await reply(free_text, keyboard=kb.channel_link_button(channel_link, bonus_tariff_id=bonus_kb_param))
+        elif has_bonus:
+            await reply(free_text, keyboard=kb._kb([
+                [{"type": "callback", "text": "🎁 Получить бонус", "payload": f"get_bonus_tariff:{tariff_id}"}],
+                [{"type": "callback", "text": "🔙 Назад", "payload": "back_main"}],
+            ]))
         else:
             await reply(free_text)
 
