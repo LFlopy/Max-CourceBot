@@ -1087,6 +1087,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         )
 
     elif payload == "adm:bc_btn_none":
+        await bot.send_message(chat_id, "📤 Рассылка началась")
         sd = user_states.get(user_id, {})
         bc_group = sd.get("bc_group", "all")
         bc_tariff_id = sd.get("bc_tariff_id")
@@ -1110,9 +1111,6 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
             user_ids = await db.get_subscribed_excluding_tariffs_user_ids(excluded_ids)
         else:
             user_ids = []
-
-        print(f"  [DEBUG bc_btn_none] message_id={message_id!r}, отправляю 'Рассылка началась'")
-        await reply("📤 Рассылка началась")
 
         sent = 0
         for uid in user_ids:
@@ -1249,6 +1247,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         await bot.answer_callback(callback_id, text="Максимум 5 кнопок достигнут ⚠️")
 
     elif payload == "adm:bc_send_with_btns":
+        await bot.send_message(chat_id, "📤 Рассылка началась")
         sd = user_states.get(user_id, {})
         bc_group = sd.get("bc_group", "all")
         bc_tariff_id = sd.get("bc_tariff_id")
@@ -1279,8 +1278,6 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
             user_ids = []
         
         clear_state(user_id)
-
-        await reply("📤 Рассылка началась")
 
         sent = 0
         for uid in user_ids:
