@@ -14,12 +14,17 @@ def _kb(buttons: list[list[dict]]) -> dict:
 # ── Главное меню (4 кнопки + Admin для админов) ──────────────
 
 def main_menu(user_id: int = 0, btn: dict | None = None) -> dict:
-    """Личный кабинет — основное меню пользователя."""
+    """Личный кабинет — основное меню пользователя.
+
+    Кнопка «Получить бонус» убрана из главного меню (2025-07-10).
+    Теперь бонус показывается сразу после покупки/активации конкретного тарифа
+    через кнопку, добавляемую к клавиатуре ссылок на ресурсы.
+    """
     b = btn or {}
     buttons = [
         [{"type": "callback", "text": b.get("btn_courses", "🍏 Курсы"), "payload": "courses"}],
         [{"type": "callback", "text": b.get("btn_my_subs", "📋 Мои подписки"), "payload": "my_subs"}],
-        [{"type": "callback", "text": b.get("btn_get_bonus", "🎁 Получить бонус"), "payload": "get_bonus"}],
+        # Кнопка «Получить бонус» убрана (2025-07-10) — бонус показывается сразу после покупки
         [{"type": "callback", "text": b.get("btn_oferta", "📄 Договор оферты"), "payload": "oferta"}],
         [{"type": "callback", "text": b.get("btn_feedback", "💬 Обратная связь"), "payload": "feedback"}],
     ]
@@ -139,15 +144,32 @@ def payment_button(payment_link: str) -> dict:
 
 # ── Кнопка со ссылкой на канал после активации ───────────────
 
-def channel_link_button(link: str) -> dict:
-    return _kb([
+def channel_link_button(link: str, bonus_tariff_id: int | None = None) -> dict:
+    """Клавиатура с кнопкой ссылки на канал и опционально «Получить бонус».
+
+    bonus_tariff_id — если передан, добавляет кнопку для получения бонуса
+    именно по этому тарифу (показывается сразу после покупки/активации).
+    """
+    buttons = [
         [{"type": "link", "text": "🔗 Ссылки для доступа", "url": link}],
         [{"type": "callback", "text": "🔙 Назад", "payload": "back_main"}],
-    ])
+    ]
+    if bonus_tariff_id is not None:
+        buttons.append([
+            {"type": "callback",
+             "text": "🎁 Получить бонус",
+             "payload": f"get_bonus_tariff:{bonus_tariff_id}"},
+        ])
+    return _kb(buttons)
 
 
-def resource_links_buttons(resources: list[dict], back_payload: str = "back_main") -> dict:
-    """Кнопки со ссылками на каждый ресурс тарифа."""
+def resource_links_buttons(resources: list[dict], back_payload: str = "back_main",
+                           bonus_tariff_id: int | None = None) -> dict:
+    """Кнопки со ссылками на каждый ресурс тарифа.
+
+    bonus_tariff_id — если передан, добавляет кнопку «Получить бонус»
+    для данного конкретного тарифа (показывается сразу после покупки/активации).
+    """
     buttons = []
     for res in resources:
         link = res.get("invite_link", "")
@@ -155,6 +177,12 @@ def resource_links_buttons(resources: list[dict], back_payload: str = "back_main
             title = res.get("chat_title") or "Ресурс"
             buttons.append([{"type": "link", "text": f"🔗 {title}", "url": link}])
     buttons.append([{"type": "callback", "text": "🔙 Назад", "payload": back_payload}])
+    if bonus_tariff_id is not None:
+        buttons.append([
+            {"type": "callback",
+             "text": "🎁 Получить бонус",
+             "payload": f"get_bonus_tariff:{bonus_tariff_id}"},
+        ])
     return _kb(buttons)
 
 

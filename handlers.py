@@ -245,15 +245,18 @@ async def _activate_purchase(bot: MaxBot, purchase: dict):
             except Exception:
                 pass
 
-    # Отправляем ссылки на ресурсы
+    # Отправляем ссылки на ресурсы + кнопка «Получить бонус» если есть
     if resources:
         links_text = await db.get_bot_text("activation_links", user_id=user_id)
         resources_with_links = [r for r in resources if r.get("invite_link")]
+        # Проверяем, есть ли бонус для ИМЕННО этого тарифа
+        has_bonus = bool(await db.get_gift_files_for_tariffs([tariff_id]))
+        bonus_kb_param = tariff_id if has_bonus else None
         if resources_with_links:
             await bot.send_message(
                 user_id,
                 links_text,
-                keyboard=kb.resource_links_buttons(resources_with_links),
+                keyboard=kb.resource_links_buttons(resources_with_links, bonus_tariff_id=bonus_kb_param),
             )
         else:
             # Фолбэк на channel_link тарифа
@@ -263,7 +266,7 @@ async def _activate_purchase(bot: MaxBot, purchase: dict):
                 await bot.send_message(
                     user_id,
                     links_text,
-                    keyboard=kb.channel_link_button(channel_link),
+                    keyboard=kb.channel_link_button(channel_link, bonus_tariff_id=bonus_kb_param),
                 )
             else:
                 res_names = [r.get("chat_title") or str(r["chat_id"]) for r in resources]
@@ -476,11 +479,13 @@ async def handle_callback(bot: MaxBot, update: dict):
         cabinet_text = await db.get_bot_text("desc_cabinet", user_id=user_id)
         await reply(cabinet_text, keyboard=kb.main_menu(user_id, btn=btn))
 
-    elif payload == "get_bonus":
-        user_tariff_ids = await db.get_active_tariff_ids(user_id)
-        gifts = await db.get_gift_files_for_tariffs(list(user_tariff_ids))
+    # ── Получить бонус по конкретному тарифу (после покупки/активации) ─
+    elif payload.startswith("get_bonus_tariff:"):
+        tariff_id = int(payload.split(":", 1)[1])
+        gifts = await db.get_gift_files_for_tariffs([tariff_id])
         if not gifts:
-            await reply("Пока для вас нет бонусов", keyboard=kb.main_menu(user_id, btn=btn))
+            await reply("К этому тарифу бонусов не предусмотрено",
+                        keyboard=kb.main_menu(user_id, btn=btn))
             return
         await reply("Вот ваш бонус 👇", keyboard=kb.main_menu(user_id, btn=btn))
         seen_tokens: set[str] = set()
@@ -490,6 +495,22 @@ async def handle_callback(bot: MaxBot, update: dict):
                 continue
             seen_tokens.add(token)
             await bot.send_file_token(user_id, token, text="")
+
+    # ── Старый обработчик (убран из меню, оставлен закомментированным) ───
+    # elif payload == "get_bonus":
+    #     user_tariff_ids = await db.get_active_tariff_ids(user_id)
+    #     gifts = await db.get_gift_files_for_tariffs(list(user_tariff_ids))
+    #     if not gifts:
+    #         await reply("Пока для вас нет бонусов", keyboard=kb.main_menu(user_id, btn=btn))
+    #         return
+    #     await reply("Вот ваш бонус 👇", keyboard=kb.main_menu(user_id, btn=btn))
+    #     seen_tokens: set[str] = set()
+    #     for g in gifts:
+    #         token = g.get("file_token") or ""
+    #         if not token or token in seen_tokens:
+    #             continue
+    #         seen_tokens.add(token)
+    #         await bot.send_file_token(user_id, token, text="")
 
     # ── Курсы стройности ─────────────────────────────────
     elif payload == "courses" or payload == "back_courses":
@@ -778,13 +799,18 @@ async def handle_callback(bot: MaxBot, update: dict):
                 except Exception:
                     pass
 
+        # Проверяем, есть ли бонус для ИМЕННО этого тарифа
+        has_bonus = bool(await db.get_gift_files_for_tariffs([tariff_id]))
+        bonus_kb_param = tariff_id if has_bonus else None
         resources_with_links = [r for r in resources if r.get("invite_link")]
         free_text = await db.get_bot_text("free_activation_success", user_id=user_id)
         if resources_with_links:
-            await reply(free_text, keyboard=kb.resource_links_buttons(resources_with_links))
+            await reply(free_text, keyboard=kb.resource_links_buttons(resources_with_links,
+                                                                       bonus_tariff_id=bonus_kb_param))
         else:
             channel_link = tariff.get("channel_link") or "https://max.ru"
-            await reply(free_text, keyboard=kb.channel_link_button(channel_link))
+            await reply(free_text, keyboard=kb.channel_link_button(channel_link,
+                                                                   bonus_tariff_id=bonus_kb_param))
 
         visible = await _get_visible_tariffs_for_user(user_id)
         catalog_text = await db.get_bot_text("desc_catalog", user_id=user_id)
