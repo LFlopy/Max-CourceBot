@@ -4,7 +4,7 @@ import json
 import asyncio
 import aiohttp
 
-API = "https://platform-api.max.ru"
+API = "https://platform-api2.max.ru"
 
 
 class MaxBot:
