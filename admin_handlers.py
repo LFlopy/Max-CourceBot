@@ -1111,6 +1111,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         else:
             user_ids = []
 
+        print(f"  [DEBUG bc_btn_none] message_id={message_id!r}, отправляю 'Рассылка началась'")
         await reply("📤 Рассылка началась")
 
         sent = 0
