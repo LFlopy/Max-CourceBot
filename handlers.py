@@ -487,7 +487,7 @@ async def handle_callback(bot: MaxBot, update: dict):
             await reply("К этому тарифу бонусов не предусмотрено",
                         keyboard=kb.main_menu(user_id, btn=btn))
             return
-        await reply("Вот ваш бонус 👇", keyboard=kb.main_menu(user_id, btn=btn))
+        await reply("Вот ваш бонус 👇")
         seen_tokens: set[str] = set()
         for g in gifts:
             token = g.get("file_token") or ""
