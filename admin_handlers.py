@@ -1185,6 +1185,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
             )
 
     elif payload == "adm:bc_add_btns:no":
+        await bot.send_message(chat_id, "📤 Рассылка началась")
         sd = user_states.get(user_id, {})
         bc_group = sd.get("bc_group", "all")
         bc_tariff_id = sd.get("bc_tariff_id")
@@ -1222,7 +1223,8 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
                 sent += 1
             except Exception:
                 pass
-        await reply(
+        await bot.send_message(
+            chat_id,
             f"✅ Рассылка завершена.\nОтправлено: **{sent}** из **{len(user_ids)}** пользователей.",
             keyboard=akb.admin_bot_settings(),
         )
