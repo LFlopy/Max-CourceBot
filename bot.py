@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 # Интервал проверки (секунды)
 EXPIRY_CHECK_INTERVAL = 60
 PAYMENT_CHECK_INTERVAL = 15
+WARMUP_CHECK_INTERVAL = 60
 
 
 def _parse_duration_to_minutes(text: str) -> int | None:
@@ -184,6 +185,45 @@ async def check_pending_payments(bot: MaxBot):
 
         await asyncio.sleep(PAYMENT_CHECK_INTERVAL)
 
+async def check_warmup_messages(bot: MaxBot):
+    """Фоновая задача: отправляет догревающие сообщения пользователям,
+    которые начали оплату тарифа (purchase.status='pending'), но не завершили её."""
+    while True:
+        try:
+            # Обеспечиваем warmup_plan для покупок, у которых его ещё нет
+            no_plan = await db.get_pending_purchases_without_plan()
+            for p in no_plan:
+                await db.ensure_warmup_plan(p["purchase_id"], p["tariff_id"])
+
+            due_sends = await db.get_due_warmup_sends()
+
+            for send in due_sends:
+                purchase_id = send["purchase_id"]
+                user_id = send["user_id"]
+
+                # Повторная проверка статуса прямо перед отправкой (защита от гонки:
+                # платёж мог подтвердиться, пока цикл работал)
+                current_status = await db.get_purchase_status(purchase_id)
+                if current_status != "pending":
+                    continue
+
+                try:
+                    if send["media_url"]:
+                        await bot.forward_attachment(
+                            user_id, "image", send["media_url"], text=send["message_text"],
+                        )
+                    else:
+                        await bot.send_message(user_id, send["message_text"])
+                    print(f"  [warmup] ✅ Отправлено purchase=#{purchase_id} user={user_id}")
+                except Exception as e:
+                    print(f"  [warmup] ❌ Ошибка отправки purchase=#{purchase_id}: {e}")
+
+                await db.mark_warmup_sent(purchase_id, send["message_id"])
+
+        except Exception as e:
+            print(f"  [warmup] Ошибка: {e}")
+
+        await asyncio.sleep(WARMUP_CHECK_INTERVAL)
 
 async def process_update(bot: MaxBot, upd: dict) -> None:
     """Обрабатывает один Update от MAX (одинаково для polling и webhook)."""
@@ -405,12 +445,12 @@ async def main():
     await subscribe_max_webhook(bot)
 
     print("🟢 Webhook активен. Отправь /start боту в MAX.")
-    print(f"🔄 Проверка подписок каждые {EXPIRY_CHECK_INTERVAL}с, платежей каждые {PAYMENT_CHECK_INTERVAL}с\n")
-
+    print(f"🔄 Проверка подписок каждые {EXPIRY_CHECK_INTERVAL}с, платежей каждые {PAYMENT_CHECK_INTERVAL}с, догревающих каждые {WARMUP_CHECK_INTERVAL}с\n")
     try:
         await asyncio.gather(
             check_expired_subscriptions(bot),
             check_pending_payments(bot),
+            check_warmup_messages(bot),
         )
     except asyncio.CancelledError:
         pass

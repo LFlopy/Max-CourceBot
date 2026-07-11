@@ -1,5 +1,7 @@
 """PostgreSQL: пул соединений + CRUD для тарифов, категорий, ресурсов, пользователей, покупок."""
 
+import random
+
 import asyncpg
 from config import DATABASE_URL
 from utils import build_user_name, build_user_template_context, format_template
@@ -176,6 +178,37 @@ async def _create_tables():
 
             -- согласие с офертой и политикой конфиденциальности
             ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_agreed BOOLEAN DEFAULT FALSE;
+
+            -- ── Догревающие рассылки (warmup) ──────────────────────────
+            ALTER TABLE tariffs ADD COLUMN IF NOT EXISTS warmup_order_mode VARCHAR(20)
+                DEFAULT 'sequential';
+
+            CREATE TABLE IF NOT EXISTS tariff_warmup_messages (
+                id            SERIAL PRIMARY KEY,
+                tariff_id     INTEGER NOT NULL REFERENCES tariffs(id) ON DELETE CASCADE,
+                text          TEXT    NOT NULL DEFAULT '',
+                media_url     TEXT,
+                delay_minutes INTEGER NOT NULL DEFAULT 0,
+                position      INTEGER DEFAULT 0,
+                is_active     BOOLEAN DEFAULT TRUE,
+                created_at    TIMESTAMP DEFAULT NOW()
+            );
+
+            CREATE TABLE IF NOT EXISTS warmup_plan (
+                id            SERIAL PRIMARY KEY,
+                purchase_id   INTEGER NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
+                slot_position INTEGER NOT NULL,
+                message_id    INTEGER NOT NULL REFERENCES tariff_warmup_messages(id) ON DELETE CASCADE,
+                UNIQUE(purchase_id, slot_position)
+            );
+
+            CREATE TABLE IF NOT EXISTS warmup_sends (
+                id          SERIAL PRIMARY KEY,
+                purchase_id INTEGER NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
+                message_id  INTEGER NOT NULL REFERENCES tariff_warmup_messages(id) ON DELETE CASCADE,
+                sent_at     TIMESTAMP DEFAULT NOW(),
+                UNIQUE(purchase_id, message_id)
+            );
         """)
 
 
@@ -1514,3 +1547,189 @@ async def get_bot_text(key: str, user_id: int | None = None, **context) -> str:
         user_context.update(context)
         context = user_context
     return format_template(text, **context)
+
+
+# ── Догревающие рассылки тарифа ─────────────────────────────
+
+async def create_warmup_message(tariff_id: int, text: str,
+                                media_url: str | None,
+                                delay_minutes: int) -> dict:
+    """Создаёт догревающее сообщение тарифа (position = max+1)."""
+    async with pool.acquire() as conn:
+        max_pos = await conn.fetchval(
+            "SELECT COALESCE(MAX(position), 0) FROM tariff_warmup_messages WHERE tariff_id = $1",
+            tariff_id,
+        )
+        row = await conn.fetchrow("""
+            INSERT INTO tariff_warmup_messages (tariff_id, text, media_url, delay_minutes, position)
+            VALUES ($1, $2, $3, $4, $5) RETURNING *
+        """, tariff_id, text, media_url or "", delay_minutes, max_pos + 1)
+        return dict(row)
+
+
+async def get_warmup_messages(tariff_id: int) -> list[dict]:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM tariff_warmup_messages WHERE tariff_id = $1 ORDER BY position, id",
+            tariff_id,
+        )
+        return [dict(r) for r in rows]
+
+
+async def get_warmup_message(message_id: int) -> dict | None:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM tariff_warmup_messages WHERE id = $1", message_id
+        )
+        return dict(row) if row else None
+
+
+async def update_warmup_message(message_id: int, **fields) -> dict | None:
+    if not fields:
+        return await get_warmup_message(message_id)
+    sets = []
+    vals = []
+    for i, (k, v) in enumerate(fields.items(), start=2):
+        sets.append(f"{k} = ${i}")
+        vals.append(v)
+    sql = f"UPDATE tariff_warmup_messages SET {', '.join(sets)} WHERE id = $1 RETURNING *"
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(sql, message_id, *vals)
+        return dict(row) if row else None
+
+
+async def delete_warmup_message(message_id: int):
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM tariff_warmup_messages WHERE id = $1", message_id)
+
+
+async def swap_warmup_positions(id_a: int, id_b: int):
+    async with pool.acquire() as conn:
+        a = await conn.fetchrow("SELECT position FROM tariff_warmup_messages WHERE id = $1", id_a)
+        b = await conn.fetchrow("SELECT position FROM tariff_warmup_messages WHERE id = $1", id_b)
+        if a and b:
+            await conn.execute("UPDATE tariff_warmup_messages SET position = $1 WHERE id = $2", b["position"], id_a)
+            await conn.execute("UPDATE tariff_warmup_messages SET position = $1 WHERE id = $2", a["position"], id_b)
+
+
+async def move_warmup_message_up(message_id: int):
+    msg = await get_warmup_message(message_id)
+    if not msg:
+        return
+    msgs = await get_warmup_messages(msg["tariff_id"])
+    for i, m in enumerate(msgs):
+        if m["id"] == message_id and i > 0:
+            await swap_warmup_positions(message_id, msgs[i - 1]["id"])
+            break
+
+
+async def move_warmup_message_down(message_id: int):
+    msg = await get_warmup_message(message_id)
+    if not msg:
+        return
+    msgs = await get_warmup_messages(msg["tariff_id"])
+    for i, m in enumerate(msgs):
+        if m["id"] == message_id and i < len(msgs) - 1:
+            await swap_warmup_positions(message_id, msgs[i + 1]["id"])
+            break
+
+
+async def set_tariff_warmup_order_mode(tariff_id: int, mode: str):
+    """mode: 'sequential' | 'random'"""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE tariffs SET warmup_order_mode = $2 WHERE id = $1", tariff_id, mode,
+        )
+
+
+async def ensure_warmup_plan(purchase_id: int, tariff_id: int) -> list[dict]:
+    """Гарантирует наличие warmup-плана для покупки (создаёт один раз, не меняет потом)."""
+    async with pool.acquire() as conn:
+        existing = await conn.fetchval(
+            "SELECT 1 FROM warmup_plan WHERE purchase_id = $1 LIMIT 1", purchase_id,
+        )
+        if existing:
+            return []
+
+        msgs = await conn.fetch("""
+            SELECT id, position FROM tariff_warmup_messages
+            WHERE tariff_id = $1 AND is_active = TRUE
+            ORDER BY position, id
+        """, tariff_id)
+        if not msgs:
+            return []
+
+        mode_row = await conn.fetchrow(
+            "SELECT warmup_order_mode FROM tariffs WHERE id = $1", tariff_id
+        )
+        mode = (mode_row["warmup_order_mode"] if mode_row else "sequential") or "sequential"
+
+        slots = [m["position"] for m in msgs]
+        message_ids = [m["id"] for m in msgs]
+        if mode == "random":
+            random.shuffle(message_ids)
+
+        for slot_pos, msg_id in zip(slots, message_ids):
+            await conn.execute("""
+                INSERT INTO warmup_plan (purchase_id, slot_position, message_id)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (purchase_id, slot_position) DO NOTHING
+            """, purchase_id, slot_pos, msg_id)
+
+        return await conn.fetch(
+            "SELECT * FROM warmup_plan WHERE purchase_id = $1", purchase_id
+        )
+
+
+async def get_pending_purchases_without_plan() -> list[dict]:
+    """Pending-покупки, у которых ещё нет warmup_plan (для фонового цикла)."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT p.id AS purchase_id, p.tariff_id
+            FROM purchases p
+            WHERE p.status = 'pending'
+              AND NOT EXISTS (SELECT 1 FROM warmup_plan wp WHERE wp.purchase_id = p.id)
+        """)
+        return [dict(r) for r in rows]
+
+
+async def get_due_warmup_sends() -> list[dict]:
+    """Дозревшие сообщения к отправке. status='pending' проверяется прямо в запросе."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT
+                p.id AS purchase_id,
+                p.user_id,
+                wp.message_id,
+                twm.text AS message_text,
+                twm.media_url
+            FROM purchases p
+            JOIN warmup_plan wp ON wp.purchase_id = p.id
+            JOIN tariff_warmup_messages twm ON twm.id = wp.message_id
+            JOIN users u ON u.user_id = p.user_id
+            LEFT JOIN warmup_sends ws
+                ON ws.purchase_id = p.id AND ws.message_id = twm.id
+            WHERE p.status = 'pending'
+              AND twm.is_active = TRUE
+              AND ws.id IS NULL
+              AND u.is_banned = FALSE
+              AND EXTRACT(EPOCH FROM (NOW() - p.purchased_at)) / 60 >= twm.delay_minutes
+            ORDER BY p.purchased_at, wp.slot_position
+        """)
+        return [dict(r) for r in rows]
+
+
+async def mark_warmup_sent(purchase_id: int, message_id: int):
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO warmup_sends (purchase_id, message_id)
+            VALUES ($1, $2)
+            ON CONFLICT (purchase_id, message_id) DO NOTHING
+        """, purchase_id, message_id)
+
+
+async def get_purchase_status(purchase_id: int) -> str | None:
+    """Быстрая точечная проверка статуса — для защиты от гонки перед отправкой."""
+    async with pool.acquire() as conn:
+        return await conn.fetchval("SELECT status FROM purchases WHERE id = $1", purchase_id)
+

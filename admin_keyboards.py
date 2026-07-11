@@ -184,6 +184,7 @@ def admin_tariff_settings(tariff_id: int, is_active: bool) -> dict:
         [{"type": "callback", "text": "🎉 Текст при успешной покупке", "payload": f"adm:set_success:{tariff_id}"}],
         [{"type": "callback", "text": "👥 Группа разрешённых", "payload": f"adm:set_allowed:{tariff_id}"}],
         [{"type": "callback", "text": "🎁 Бонусный файл", "payload": f"adm:tariff_gifts:{tariff_id}"}],
+        [{"type": "callback", "text": "🔥 Догревающие рассылки", "payload": f"adm:warmup_list:{tariff_id}"}],
         [{"type": "callback", "text": "🛒 Ссылка на покупку", "payload": f"adm:buy_link:{tariff_id}"}],
         [{"type": "callback", "text": "💾 Сохранить", "payload": f"adm:save_settings:{tariff_id}"}],
         [{"type": "callback", "text": hide_text, "payload": f"adm:toggle_active:{tariff_id}"}],
@@ -718,4 +719,59 @@ def admin_broadcast_button_format_help() -> dict:
     """Подсказка по формату кнопок."""
     return _kb([
         [{"type": "callback", "text": "🔙 Назад", "payload": "adm:broadcast"}],
+    ])
+
+    # ── Догревающие рассылки тарифа ───────────────────────────────
+
+def admin_warmup_list(tariff_id: int, messages: list[dict], order_mode: str) -> dict:
+    """Список догревающих сообщений тарифа."""
+    mode_label = "🔀 Поочерёдно" if order_mode == "sequential" else "🎲 Случайно (без повторов)"
+    buttons = [[{
+        "type": "callback",
+        "text": f"Порядок отправки: {mode_label}",
+        "payload": f"adm:warmup_toggle_mode:{tariff_id}",
+    }]]
+    for m in messages:
+        icon = "✅" if m["is_active"] else "⛔"
+        preview = (m["text"][:25] + "…") if len(m["text"]) > 25 else m["text"]
+        delay = m["delay_minutes"]
+        if delay >= 1440:
+            delay_label = f"{delay // 1440} дн."
+        elif delay >= 60:
+            delay_label = f"{delay // 60} ч."
+        else:
+            delay_label = f"{delay} мин."
+        buttons.append([{
+            "type": "callback",
+            "text": f"{icon} Через {delay_label} — {preview}",
+            "payload": f"adm:warmup_open:{m['id']}",
+        }])
+    buttons.append([{"type": "callback", "text": "➕ Добавить сообщение", "payload": f"adm:warmup_add:{tariff_id}"}])
+    buttons.append([{"type": "callback", "text": "🔙 Назад", "payload": f"adm:settings:{tariff_id}"}])
+    return _kb(buttons)
+
+
+def admin_warmup_detail(message_id: int, tariff_id: int, is_active: bool) -> dict:
+    toggle_text = "⛔ Отключить" if is_active else "✅ Включить"
+    return _kb([
+        [{"type": "callback", "text": "✏️ Изменить текст", "payload": f"adm:warmup_edit_text:{message_id}"}],
+        [{"type": "callback", "text": "🖼 Изменить медиа", "payload": f"adm:warmup_edit_media:{message_id}"}],
+        [{"type": "callback", "text": "⏱ Изменить время отправки", "payload": f"adm:warmup_edit_delay:{message_id}"}],
+        [{"type": "callback", "text": "🔼 Переместить вверх", "payload": f"adm:warmup_up:{message_id}:{tariff_id}"}],
+        [{"type": "callback", "text": "🔽 Переместить вниз", "payload": f"adm:warmup_down:{message_id}:{tariff_id}"}],
+        [{"type": "callback", "text": toggle_text, "payload": f"adm:warmup_toggle_active:{message_id}:{tariff_id}"}],
+        [{"type": "callback", "text": "🗑 Удалить", "payload": f"adm:warmup_delete:{message_id}:{tariff_id}"}],
+        [{"type": "callback", "text": "🔙 Назад", "payload": f"adm:warmup_list:{tariff_id}"}],
+    ])
+
+
+def admin_warmup_cancel(tariff_id: int) -> dict:
+    return _kb([
+        [{"type": "callback", "text": "❌ Отмена", "payload": f"adm:warmup_list:{tariff_id}"}],
+    ])
+
+
+def admin_warmup_back_to_detail(message_id: int, tariff_id: int) -> dict:
+    return _kb([
+        [{"type": "callback", "text": "🔙 Назад", "payload": f"adm:warmup_open:{message_id}"}],
     ])
