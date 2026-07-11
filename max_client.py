@@ -277,10 +277,22 @@ class MaxBot:
             return False
         return True
 
-    # ── Получить чаты бота ───────────────────────────────────
+    # ── Получить чаты бота (СПИСОК) ──────────────────────────
     async def get_chats(self) -> list[dict]:
+        """GET /chats — список всех чатов бота.
+        ⚠️ Отключается в августе 2026. Используется ТОЛЬКО для разового
+        бэкфилла локальной таблицы bot_chats (см. bot.py: backfill_bot_chats).
+        В рантайме вместо этого используй db.get_all_bot_chats()."""
         _, data = await self._request("GET", "/chats")
         return data.get("chats", [])
+
+    # ── Получить один чат по id (НЕ депрекейтится) ───────────
+    async def get_chat_info(self, chat_id: int) -> dict:
+        """GET /chats/{chatId} — инфа по одному чату/каналу (title, link и т.д.).
+        Используется на событии bot_added, т.к. само событие Update
+        не содержит ни title, ни link — только chat_id и is_channel."""
+        _, data = await self._request("GET", f"/chats/{chat_id}")
+        return data
 
     # ── Long polling ─────────────────────────────────────────
     async def poll(self, marker: int | None = None) -> dict:
