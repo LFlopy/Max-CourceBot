@@ -287,7 +287,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
     # ── Создание: перейти к ресурсам ──────────────────────
     elif payload == "adm:go_resources":
         state_data = user_states.get(user_id, {})
-        chats = await bot.get_chats()
+        chats = await db.get_all_bot_chats()
         set_state(user_id, "adm_create_pick_resources",
                   tariff_name=state_data.get("tariff_name", ""),
                   tariff_price=state_data.get("tariff_price", 0),
@@ -544,7 +544,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
     # ── Настройка: Ресурсы ────────────────────────────────
     elif payload.startswith("adm:set_resources:"):
         tid = int(payload.split(":")[2])
-        chats = await bot.get_chats()
+        chats = await db.get_all_bot_chats()
         existing = await db.get_tariff_resources(tid)
         selected = {r["chat_id"] for r in existing}
         # Карта сохранённых invite_link из БД
@@ -901,7 +901,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
     # ── Управление ресурсами ─────────────────────────────────
     elif payload == "adm:manage_resources":
         clear_state(user_id)
-        chats = await bot.get_chats()
+        chats = await db.get_all_bot_chats()
         usage = await db.get_resource_usage()
         # Добавляем ресурсы из БД, которых нет в текущих чатах бота
         chat_ids_in_list = {c.get("chat_id") for c in chats}
@@ -916,7 +916,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
 
     elif payload.startswith("adm:res_del:"):
         cid = int(payload.split(":")[2])
-        chats = await bot.get_chats()
+        chats = await db.get_all_bot_chats()
         usage = await db.get_resource_usage()
         # Находим название
         title = str(cid)
@@ -942,7 +942,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         # Бот покидает чат
         await bot.leave_chat(cid)
         # Обновляем список
-        chats = await bot.get_chats()
+        chats = await db.get_all_bot_chats()
         usage = await db.get_resource_usage()
         chat_ids_in_list = {c.get("chat_id") for c in chats}
         for c_id, _ in usage.items():
