@@ -25,6 +25,15 @@ async def close_db():
 async def _create_tables():
     async with pool.acquire() as conn:
         await conn.execute("""
+            CREATE TABLE IF NOT EXISTS bot_chats (
+                chat_id     BIGINT PRIMARY KEY,
+                title       VARCHAR(255) DEFAULT '',
+                link        TEXT DEFAULT '',
+                is_channel  BOOLEAN DEFAULT FALSE,
+                is_active   BOOLEAN DEFAULT TRUE,
+                updated_at  TIMESTAMP DEFAULT NOW()
+            );
+
             CREATE TABLE IF NOT EXISTS categories (
                 id          SERIAL PRIMARY KEY,
                 name        VARCHAR(255) NOT NULL,
@@ -1733,3 +1742,51 @@ async def get_purchase_status(purchase_id: int) -> str | None:
     async with pool.acquire() as conn:
         return await conn.fetchval("SELECT status FROM purchases WHERE id = $1", purchase_id)
 
+
+# ── Чаты/каналы бота (замена GET /chats, который отключат в августе 2026) ──
+
+async def upsert_bot_chat(chat_id: int, title: str = "", link: str = "",
+                           is_channel: bool = False):
+    """Добавляет/обновляет чат в локальном списке. Вызывается на bot_added
+    и при бэкфилле стартовым списком через GET /chats (пока он ещё жив)."""
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO bot_chats (chat_id, title, link, is_channel, is_active, updated_at)
+            VALUES ($1, $2, $3, $4, TRUE, NOW())
+            ON CONFLICT (chat_id) DO UPDATE SET
+                title      = EXCLUDED.title,
+                link       = COALESCE(NULLIF(EXCLUDED.link, ''), bot_chats.link),
+                is_channel = EXCLUDED.is_channel,
+                is_active  = TRUE,
+                updated_at = NOW()
+        """, chat_id, title, link, is_channel)
+
+
+async def mark_bot_chat_removed(chat_id: int):
+    """Вызывается на bot_removed — бот вышел/удалён из чата."""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE bot_chats SET is_active = FALSE, updated_at = NOW() WHERE chat_id = $1",
+            chat_id,
+        )
+
+
+async def update_bot_chat_title(chat_id: int, title: str):
+    """Вызывается на chat_title_changed."""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE bot_chats SET title = $1, updated_at = NOW() WHERE chat_id = $2",
+            title, chat_id,
+        )
+
+
+async def get_all_bot_chats(include_inactive: bool = False) -> list[dict]:
+    """Замена bot.get_chats() — читает локальный список вместо GET /chats."""
+    async with pool.acquire() as conn:
+        if include_inactive:
+            rows = await conn.fetch("SELECT * FROM bot_chats ORDER BY title")
+        else:
+            rows = await conn.fetch(
+                "SELECT * FROM bot_chats WHERE is_active = TRUE ORDER BY title"
+            )
+        return [dict(r) for r in rows]
