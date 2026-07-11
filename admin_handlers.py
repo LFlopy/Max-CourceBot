@@ -748,18 +748,18 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         await reply(text, keyboard=akb.admin_tariff_gifts_menu(tid))
 
 # ── Догревающие рассылки тарифа: список ──────────────────
-        elif payload.startswith("adm:warmup_list:"):
-            tid = int(payload.split(":")[2])
-            clear_state(user_id)
-            tariff = await db.get_tariff(tid)
-            if not tariff:
-                await reply("Тариф не найден")
-                return True
-            messages = await db.get_warmup_messages(tid)
-            await reply(
-                f"🔥 Догревающие рассылки тарифа «{tariff['name']}»\n\n"
-                "Отправляются пользователям, которые начали оплату, но не завершили её.",
-                keyboard=akb.admin_warmup_list(tid, messages, tariff.get("warmup_order_mode") or "sequential"),
+    elif payload.startswith("adm:warmup_list:"):
+        tid = int(payload.split(":")[2])
+        clear_state(user_id)
+        tariff = await db.get_tariff(tid)
+        if not tariff:
+            await reply("Тариф не найден")
+            return True
+        messages = await db.get_warmup_messages(tid)
+        await reply(
+            f"🔥 Догревающие рассылки тарифа «{tariff['name']}»\n\n"
+            "Отправляются пользователям, которые начали оплату, но не завершили её.",
+            keyboard=akb.admin_warmup_list(tid, messages, tariff.get("warmup_order_mode") or "sequential"),
             )
 
         # ── Переключить режим порядка (поочерёдно / случайно) ────
