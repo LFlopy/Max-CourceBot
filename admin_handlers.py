@@ -762,128 +762,128 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
             keyboard=akb.admin_warmup_list(tid, messages, tariff.get("warmup_order_mode") or "sequential"),
             )
 
-        # ── Переключить режим порядка (поочерёдно / случайно) ────
-        elif payload.startswith("adm:warmup_toggle_mode:"):
-            tid = int(payload.split(":")[2])
-            tariff = await db.get_tariff(tid)
-            current_mode = tariff.get("warmup_order_mode") or "sequential"
-            new_mode = "random" if current_mode == "sequential" else "sequential"
-            await db.set_tariff_warmup_order_mode(tid, new_mode)
-            messages = await db.get_warmup_messages(tid)
-            await reply(
-                f"🔥 Догревающие рассылки тарифа «{tariff['name']}»\n\n"
-                "Отправляются пользователям, которые начали оплату, но не завершили её.",
-                keyboard=akb.admin_warmup_list(tid, messages, new_mode),
-            )
+    # ── Переключить режим порядка (поочерёдно / случайно) ────
+    elif payload.startswith("adm:warmup_toggle_mode:"):
+        tid = int(payload.split(":")[2])
+        tariff = await db.get_tariff(tid)
+        current_mode = tariff.get("warmup_order_mode") or "sequential"
+        new_mode = "random" if current_mode == "sequential" else "sequential"
+        await db.set_tariff_warmup_order_mode(tid, new_mode)
+        messages = await db.get_warmup_messages(tid)
+        await reply(
+            f"🔥 Догревающие рассылки тарифа «{tariff['name']}»\n\n"
+            "Отправляются пользователям, которые начали оплату, но не завершили её.",
+            keyboard=akb.admin_warmup_list(tid, messages, new_mode),
+        )
 
-        # ── Добавить сообщение: шаг 1 — текст ─────────────────────
-        elif payload.startswith("adm:warmup_add:"):
-            tid = int(payload.split(":")[2])
-            set_state(user_id, "adm_warmup_add_text", tariff_id=tid)
-            await reply(
-                "Отправьте текст догревающего сообщения:",
-                keyboard=akb.admin_warmup_cancel(tid),
-            )
+    # ── Добавить сообщение: шаг 1 — текст ─────────────────────
+    elif payload.startswith("adm:warmup_add:"):
+        tid = int(payload.split(":")[2])
+        set_state(user_id, "adm_warmup_add_text", tariff_id=tid)
+        await reply(
+            "Отправьте текст догревающего сообщения:",
+            keyboard=akb.admin_warmup_cancel(tid),
+        )
 
-        # ── Открыть карточку сообщения ─────────────────────────────
-        elif payload.startswith("adm:warmup_open:"):
-            mid = int(payload.split(":")[2])
-            msg = await db.get_warmup_message(mid)
-            if not msg:
-                await reply("Сообщение не найдено")
-                return True
-            delay = msg["delay_minutes"]
-            delay_label = f"{delay} мин."
-            if delay >= 1440:
-                delay_label = f"{delay // 1440} дн."
-            elif delay >= 60:
-                delay_label = f"{delay // 60} ч."
-            await reply(
-                f"Текст: {msg['text']}\n\n"
-                f"Медиа: {'есть' if msg['media_url'] else 'нет'}\n"
-                f"Время отправки: через {delay_label} после начала оплаты\n"
-                f"Статус: {'активно' if msg['is_active'] else 'отключено'}",
-                keyboard=akb.admin_warmup_detail(mid, msg["tariff_id"], msg["is_active"]),
-            )
+    # ── Открыть карточку сообщения ─────────────────────────────
+    elif payload.startswith("adm:warmup_open:"):
+        mid = int(payload.split(":")[2])
+        msg = await db.get_warmup_message(mid)
+        if not msg:
+            await reply("Сообщение не найдено")
+            return True
+        delay = msg["delay_minutes"]
+        delay_label = f"{delay} мин."
+        if delay >= 1440:
+            delay_label = f"{delay // 1440} дн."
+        elif delay >= 60:
+            delay_label = f"{delay // 60} ч."
+        await reply(
+            f"Текст: {msg['text']}\n\n"
+            f"Медиа: {'есть' if msg['media_url'] else 'нет'}\n"
+            f"Время отправки: через {delay_label} после начала оплаты\n"
+            f"Статус: {'активно' if msg['is_active'] else 'отключено'}",
+            keyboard=akb.admin_warmup_detail(mid, msg["tariff_id"], msg["is_active"]),
+        )
 
-        # ── Изменить текст ────────────────────────────────────────
-        elif payload.startswith("adm:warmup_edit_text:"):
-            mid = int(payload.split(":")[2])
-            msg = await db.get_warmup_message(mid)
-            set_state(user_id, "adm_warmup_edit_text", message_id=mid, tariff_id=msg["tariff_id"])
-            await reply(
-                "Отправьте новый текст сообщения:",
-                keyboard=akb.admin_warmup_back_to_detail(mid, msg["tariff_id"]),
-            )
+    # ── Изменить текст ────────────────────────────────────────
+    elif payload.startswith("adm:warmup_edit_text:"):
+        mid = int(payload.split(":")[2])
+        msg = await db.get_warmup_message(mid)
+        set_state(user_id, "adm_warmup_edit_text", message_id=mid, tariff_id=msg["tariff_id"])
+        await reply(
+            "Отправьте новый текст сообщения:",
+            keyboard=akb.admin_warmup_back_to_detail(mid, msg["tariff_id"]),
+        )
 
-        # ── Изменить медиа ────────────────────────────────────────
-        elif payload.startswith("adm:warmup_edit_media:"):
-            mid = int(payload.split(":")[2])
-            msg = await db.get_warmup_message(mid)
-            set_state(user_id, "adm_warmup_edit_media", message_id=mid, tariff_id=msg["tariff_id"])
-            await reply(
-                "Отправьте новое медиа (фото/видео) для сообщения\n(Или /empty чтобы убрать медиа):",
-                keyboard=akb.admin_warmup_back_to_detail(mid, msg["tariff_id"]),
+    # ── Изменить медиа ────────────────────────────────────────
+    elif payload.startswith("adm:warmup_edit_media:"):
+        mid = int(payload.split(":")[2])
+        msg = await db.get_warmup_message(mid)
+        set_state(user_id, "adm_warmup_edit_media", message_id=mid, tariff_id=msg["tariff_id"])
+        await reply(
+            "Отправьте новое медиа (фото/видео) для сообщения\n(Или /empty чтобы убрать медиа):",
+            keyboard=akb.admin_warmup_back_to_detail(mid, msg["tariff_id"]),
             )
 
         # ── Изменить время отправки (явный отдельный пункт) ───────
-        elif payload.startswith("adm:warmup_edit_delay:"):
-            mid = int(payload.split(":")[2])
-            msg = await db.get_warmup_message(mid)
-            set_state(user_id, "adm_warmup_edit_delay", message_id=mid, tariff_id=msg["tariff_id"])
-            await reply(
-                "Введите время отправки после начала оплаты.\n"
-                "Формат: число + ч/м, например: 2ч, 30м, 48ч",
-                keyboard=akb.admin_warmup_back_to_detail(mid, msg["tariff_id"]),
-            )
+    elif payload.startswith("adm:warmup_edit_delay:"):
+        mid = int(payload.split(":")[2])
+        msg = await db.get_warmup_message(mid)
+        set_state(user_id, "adm_warmup_edit_delay", message_id=mid, tariff_id=msg["tariff_id"])
+        await reply(
+            "Введите время отправки после начала оплаты.\n"
+            "Формат: число + ч/м, например: 2ч, 30м, 48ч",
+            keyboard=akb.admin_warmup_back_to_detail(mid, msg["tariff_id"]),
+        )
 
-        # ── Переместить вверх/вниз ──────────────────────────────────
-        elif payload.startswith("adm:warmup_up:"):
-            parts = payload.split(":")
-            mid, tid = int(parts[2]), int(parts[3])
-            await db.move_warmup_message_up(mid)
-            messages = await db.get_warmup_messages(tid)
-            tariff = await db.get_tariff(tid)
-            await reply(
-                f"🔥 Догревающие рассылки тарифа «{tariff['name']}»",
-                keyboard=akb.admin_warmup_list(tid, messages, tariff.get("warmup_order_mode") or "sequential"),
-            )
+    # ── Переместить вверх/вниз ──────────────────────────────────
+    elif payload.startswith("adm:warmup_up:"):
+        parts = payload.split(":")
+        mid, tid = int(parts[2]), int(parts[3])
+        await db.move_warmup_message_up(mid)
+        messages = await db.get_warmup_messages(tid)
+        tariff = await db.get_tariff(tid)
+        await reply(
+            f"🔥 Догревающие рассылки тарифа «{tariff['name']}»",
+            keyboard=akb.admin_warmup_list(tid, messages, tariff.get("warmup_order_mode") or "sequential"),
+        )
 
-        elif payload.startswith("adm:warmup_down:"):
-            parts = payload.split(":")
-            mid, tid = int(parts[2]), int(parts[3])
-            await db.move_warmup_message_down(mid)
-            messages = await db.get_warmup_messages(tid)
-            tariff = await db.get_tariff(tid)
-            await reply(
-                f"🔥 Догревающие рассылки тарифа «{tariff['name']}»",
-                keyboard=akb.admin_warmup_list(tid, messages, tariff.get("warmup_order_mode") or "sequential"),
-            )
+    elif payload.startswith("adm:warmup_down:"):
+        parts = payload.split(":")
+        mid, tid = int(parts[2]), int(parts[3])
+        await db.move_warmup_message_down(mid)
+        messages = await db.get_warmup_messages(tid)
+        tariff = await db.get_tariff(tid)
+        await reply(
+            f"🔥 Догревающие рассылки тарифа «{tariff['name']}»",
+            keyboard=akb.admin_warmup_list(tid, messages, tariff.get("warmup_order_mode") or "sequential"),
+        )
 
-        # ── Вкл/выкл сообщение ──────────────────────────────────────
-        elif payload.startswith("adm:warmup_toggle_active:"):
-            parts = payload.split(":")
-            mid, tid = int(parts[2]), int(parts[3])
-            msg = await db.get_warmup_message(mid)
-            await db.update_warmup_message(mid, is_active=not msg["is_active"])
-            messages = await db.get_warmup_messages(tid)
-            tariff = await db.get_tariff(tid)
-            await reply(
-                f"🔥 Догревающие рассылки тарифа «{tariff['name']}»",
-                keyboard=akb.admin_warmup_list(tid, messages, tariff.get("warmup_order_mode") or "sequential"),
-            )
+    # ── Вкл/выкл сообщение ──────────────────────────────────────
+    elif payload.startswith("adm:warmup_toggle_active:"):
+        parts = payload.split(":")
+        mid, tid = int(parts[2]), int(parts[3])
+        msg = await db.get_warmup_message(mid)
+        await db.update_warmup_message(mid, is_active=not msg["is_active"])
+        messages = await db.get_warmup_messages(tid)
+        tariff = await db.get_tariff(tid)
+        await reply(
+            f"🔥 Догревающие рассылки тарифа «{tariff['name']}»",
+            keyboard=akb.admin_warmup_list(tid, messages, tariff.get("warmup_order_mode") or "sequential"),
+        )
 
-        # ── Удалить сообщение ────────────────────────────────────────
-        elif payload.startswith("adm:warmup_delete:"):
-            parts = payload.split(":")
-            mid, tid = int(parts[2]), int(parts[3])
-            await db.delete_warmup_message(mid)
-            messages = await db.get_warmup_messages(tid)
-            tariff = await db.get_tariff(tid)
-            await reply(
-                f"✅ Сообщение удалено.\n\n🔥 Догревающие рассылки тарифа «{tariff['name']}»",
-                keyboard=akb.admin_warmup_list(tid, messages, tariff.get("warmup_order_mode") or "sequential"),
-            )
+    # ── Удалить сообщение ────────────────────────────────────────
+    elif payload.startswith("adm:warmup_delete:"):
+        parts = payload.split(":")
+        mid, tid = int(parts[2]), int(parts[3])
+        await db.delete_warmup_message(mid)
+        messages = await db.get_warmup_messages(tid)
+        tariff = await db.get_tariff(tid)
+        await reply(
+            f"✅ Сообщение удалено.\n\n🔥 Догревающие рассылки тарифа «{tariff['name']}»",
+            keyboard=akb.admin_warmup_list(tid, messages, tariff.get("warmup_order_mode") or "sequential"),
+        )
 
     # ══════════════════════════════════════════════════════════
     # ══  НАСТРОЙКИ БОТА  ═════════════════════════════════════
