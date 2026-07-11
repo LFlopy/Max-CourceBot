@@ -208,8 +208,11 @@ async def _create_tables():
                 purchase_id   INTEGER NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
                 slot_position INTEGER NOT NULL,
                 message_id    INTEGER NOT NULL REFERENCES tariff_warmup_messages(id) ON DELETE CASCADE,
+                delay_minutes INTEGER,
                 UNIQUE(purchase_id, slot_position)
             );
+
+            ALTER TABLE warmup_plan ADD COLUMN IF NOT EXISTS delay_minutes INTEGER;
 
             CREATE TABLE IF NOT EXISTS warmup_sends (
                 id          SERIAL PRIMARY KEY,
@@ -1661,7 +1664,7 @@ async def ensure_warmup_plan(purchase_id: int, tariff_id: int) -> list[dict]:
             return []
 
         msgs = await conn.fetch("""
-            SELECT id, position FROM tariff_warmup_messages
+            SELECT id, position, delay_minutes FROM tariff_warmup_messages
             WHERE tariff_id = $1 AND is_active = TRUE
             ORDER BY position, id
         """, tariff_id)
@@ -1675,15 +1678,20 @@ async def ensure_warmup_plan(purchase_id: int, tariff_id: int) -> list[dict]:
 
         slots = [m["position"] for m in msgs]
         message_ids = [m["id"] for m in msgs]
+        # Задержки — это то, что реально определяет момент отправки.
+        # При random-режиме мешать нужно именно их, а не только id сообщений,
+        # иначе слот меняется, а время отправки остаётся прежним (общим на всех).
+        delays = [m["delay_minutes"] for m in msgs]
         if mode == "random":
             random.shuffle(message_ids)
+            random.shuffle(delays)
 
-        for slot_pos, msg_id in zip(slots, message_ids):
+        for slot_pos, msg_id, delay in zip(slots, message_ids, delays):
             await conn.execute("""
-                INSERT INTO warmup_plan (purchase_id, slot_position, message_id)
-                VALUES ($1, $2, $3)
+                INSERT INTO warmup_plan (purchase_id, slot_position, message_id, delay_minutes)
+                VALUES ($1, $2, $3, $4)
                 ON CONFLICT (purchase_id, slot_position) DO NOTHING
-            """, purchase_id, slot_pos, msg_id)
+            """, purchase_id, slot_pos, msg_id, delay)
 
         return await conn.fetch(
             "SELECT * FROM warmup_plan WHERE purchase_id = $1", purchase_id
@@ -1722,7 +1730,8 @@ async def get_due_warmup_sends() -> list[dict]:
               AND twm.is_active = TRUE
               AND ws.id IS NULL
               AND u.is_banned = FALSE
-              AND EXTRACT(EPOCH FROM (NOW() - p.purchased_at)) / 60 >= twm.delay_minutes
+              AND EXTRACT(EPOCH FROM (NOW() - p.purchased_at)) / 60
+                  >= COALESCE(wp.delay_minutes, twm.delay_minutes)
             ORDER BY p.purchased_at, wp.slot_position
         """)
         return [dict(r) for r in rows]
