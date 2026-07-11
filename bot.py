@@ -228,7 +228,40 @@ async def check_warmup_messages(bot: MaxBot):
 async def process_update(bot: MaxBot, upd: dict) -> None:
     """Обрабатывает один Update от MAX (одинаково для polling и webhook)."""
     try:
-        # MAX не шлёт update_type — определяем по ключам
+        update_type = upd.get("update_type", "")
+
+        # ── Чат/канал: бот добавлен ──────────────────────────
+        if update_type == "bot_added":
+            chat_id = upd.get("chat_id")
+            is_channel = upd.get("is_channel", False)
+            print(f"  [bot_added] chat_id={chat_id} is_channel={is_channel}")
+            title, link = str(chat_id), ""
+            try:
+                info = await bot.get_chat_info(chat_id)
+                title = info.get("title") or title
+                link = info.get("link") or ""
+            except Exception as e:
+                print(f"  [bot_added] не удалось получить инфо о чате: {e}")
+            await db.upsert_bot_chat(chat_id, title=title, link=link, is_channel=is_channel)
+            return
+
+        # ── Чат/канал: бот удалён ────────────────────────────
+        if update_type == "bot_removed":
+            chat_id = upd.get("chat_id")
+            print(f"  [bot_removed] chat_id={chat_id}")
+            await db.mark_bot_chat_removed(chat_id)
+            return
+
+        # ── Чат/канал: сменилось название ────────────────────
+        if update_type == "chat_title_changed":
+            chat_id = upd.get("chat_id")
+            new_title = upd.get("title", "")
+            print(f"  [chat_title_changed] chat_id={chat_id} title={new_title}")
+            if chat_id and new_title:
+                await db.update_bot_chat_title(chat_id, new_title)
+            return
+
+        # MAX не всегда шлёт update_type в остальных случаях — определяем по ключам
         if "callback" in upd:
             print(f"  [callback] payload={upd['callback'].get('payload', '?')}")
             await handle_callback(bot, upd)
@@ -412,6 +445,31 @@ async def subscribe_max_webhook(bot: MaxBot) -> None:
     print(f"✅ Подписка на MAX webhook оформлена: {MAX_WEBHOOK_URL}")
 
 
+async def backfill_bot_chats(bot: MaxBot) -> None:
+    """Разово подтягивает список чатов через GET /chats и кладёт в bot_chats.
+    Нужно, чтобы в таблице оказались чаты, в которые бота добавили ДО того,
+    как появилась эта логика (для новых чатов дальше всё придёт через
+    события bot_added/bot_removed).
+    ⚠️ GET /chats отключается в августе 2026 — после этого срока функцию
+    можно (и нужно) убрать, дальше таблица живёт только на вебхуках."""
+    try:
+        chats = await bot.get_chats()
+    except Exception as e:
+        print(f"  [backfill] не удалось получить список чатов: {e}")
+        return
+    for c in chats:
+        cid = c.get("chat_id")
+        if not cid:
+            continue
+        await db.upsert_bot_chat(
+            cid,
+            title=c.get("title", str(cid)),
+            link=c.get("link", ""),
+            is_channel=c.get("type") == "channel" or c.get("is_channel", False),
+        )
+    print(f"  [backfill] bot_chats: подтянуто/обновлено {len(chats)} чатов")
+
+
 async def shutdown(bot: MaxBot):
     """Корректное завершение: закрываем сессии и сервер."""
     print("\n🔴 Завершение работы...")
@@ -437,6 +495,9 @@ async def main():
 
     # Сбрасываем старые подписки (на случай смены URL/секрета)
     await bot.cleanup_webhooks()
+
+    # Разовый бэкфилл локальной таблицы чатов, пока GET /chats ещё жив
+    await backfill_bot_chats(bot)
 
     # Запускаем HTTP-сервер для приёма webhook-ов
     await start_webhook_server(bot)
