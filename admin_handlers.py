@@ -306,9 +306,35 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
             keyboard=akb.admin_resource_picker(chats, set()),
         )
 
+    elif payload.startswith("adm:res_pick_page:"):
+        page = int(payload.split(":")[2])
+        state_data = user_states.get(user_id, {})
+        chats = state_data.get("chats", [])
+        selected = state_data.get("selected_resources", set())
+        is_edit = state_data.get("state") == "adm_edit_resources"
+        edit_tid = state_data.get("tariff_id") if is_edit else None
+        state_data["resource_page"] = page
+
+        if is_edit:
+            tariff = await db.get_tariff(edit_tid)
+            header = f"Тариф — {tariff['name']}\n \n"
+        else:
+            name = state_data.get("tariff_name", "")
+            price = state_data.get("tariff_price", 0)
+            is_free = state_data.get("is_free", False)
+            price_str = "бесплатно" if is_free else f"{price}₽"
+            header = f"Тариф — {name}\nЦена: {price_str}\n \n"
+
+        await reply(
+            header + "Выберите ресурсы к которым нужно выдать доступ после покупки",
+            keyboard=akb.admin_resource_picker(chats, selected, edit_tariff_id=edit_tid, page=page),
+        )
+
     # ── Создание / редактирование: переключить ресурс ─────
     elif payload.startswith("adm:res_toggle:"):
-        res_id = int(payload.split(":")[2])
+        parts = payload.split(":")
+        res_id = int(parts[2])
+        page = int(parts[3]) if len(parts) > 3 else 0
         state_data = user_states.get(user_id, {})
         selected = state_data.get("selected_resources", set())
         if res_id in selected:
@@ -316,6 +342,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         else:
             selected.add(res_id)
         state_data["selected_resources"] = selected
+        state_data["resource_page"] = page
 
         chats = state_data.get("chats", [])
         is_edit = state_data.get("state") == "adm_edit_resources"
@@ -333,7 +360,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
 
         await reply(
             header + "Выберите ресурсы к которым нужно выдать доступ после покупки",
-            keyboard=akb.admin_resource_picker(chats, selected, edit_tariff_id=edit_tid),
+            keyboard=akb.admin_resource_picker(chats, selected, edit_tariff_id=edit_tid, page=page),
         )
 
     # ── Создание / редактирование: сохранить ресурсы ──────
@@ -563,7 +590,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
                     "title": f"❓ {r.get('chat_title') or r['chat_id']} (удалён)",
                     "link": r.get("invite_link", ""),
                 })
-        set_state(user_id, "adm_edit_resources", tariff_id=tid, chats=chats, selected_resources=selected)
+        set_state(user_id, "adm_edit_resources", tariff_id=tid, chats=chats, selected_resources=selected, resource_page=0)
         tariff = await db.get_tariff(tid)
         await reply(
             f"Тариф — {tariff['name']}\n \n"
@@ -910,7 +937,61 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
                 chats.append({"chat_id": cid, "title": f"❓ {cid} (недоступен)"})
         await reply(
             "📋 Ресурсы бота (чаты/каналы).\n\n"
-            "Нажмите на ресурс чтобы удалить его из бота и отвязать от всех тарифов.",
+            "Нажмите на ресурс, чтобы бот вышел из него и отвязал его от всех тарифов.",
+            keyboard=akb.admin_resources_list(chats, usage),
+        )
+
+    elif payload.startswith("adm:manage_resources_page:"):
+        page = int(payload.split(":")[2])
+        chats = await db.get_all_bot_chats()
+        usage = await db.get_resource_usage()
+        chat_ids_in_list = {c.get("chat_id") for c in chats}
+        for cid, tariff_names in usage.items():
+            if cid not in chat_ids_in_list:
+                chats.append({"chat_id": cid, "title": f"❓ {cid} (недоступен)"})
+        await reply(
+            "📋 Ресурсы бота (чаты/каналы).\n\n"
+            "Нажмите на ресурс, чтобы бот вышел из него и отвязал его от всех тарифов.",
+            keyboard=akb.admin_resources_list(chats, usage, page=page),
+        )
+
+    elif payload == "adm:res_add_manual":
+        set_state(user_id, "adm_add_resource")
+        await reply(
+            "Отправьте `chat_id` чата или канала, где бот уже добавлен.",
+            keyboard=akb.admin_back_to_settings_menu(),
+        )
+
+    elif payload.startswith("adm:res_delete:"):
+        cid = int(payload.split(":")[2])
+        chats = await db.get_all_bot_chats()
+        title = str(cid)
+        for c in chats:
+            if c.get("chat_id") == cid:
+                title = c.get("title", str(cid))
+                break
+
+        left = await bot.leave_chat(cid)
+        await db.delete_resource_from_all_tariffs(cid)
+        if left:
+            await db.mark_bot_chat_removed(cid)
+
+        chats = await db.get_all_bot_chats()
+        usage = await db.get_resource_usage()
+        chat_ids_in_list = {c.get("chat_id") for c in chats}
+        for c_id, _ in usage.items():
+            if c_id not in chat_ids_in_list:
+                chats.append({"chat_id": c_id, "title": f"❓ {c_id} (недоступен)"})
+
+        if left:
+            text = f"✅ Бот вышел из ресурса «{title}». Ресурс отвязан от тарифов.\n\n"
+        else:
+            text = (
+                f"⚠️ Не удалось выполнить выход из ресурса «{title}» через MAX API. "
+                "Ресурс отвязан от тарифов, но может оставаться в каталоге до получения события удаления.\n\n"
+            )
+        await reply(
+            text + "📋 Ресурсы бота (чаты/каналы).",
             keyboard=akb.admin_resources_list(chats, usage),
         )
 
@@ -940,7 +1021,9 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         # Отвязываем от тарифов
         await db.delete_resource_from_all_tariffs(cid)
         # Бот покидает чат
-        await bot.leave_chat(cid)
+        left = await bot.leave_chat(cid)
+        if left:
+            await db.mark_bot_chat_removed(cid)
         # Обновляем список
         chats = await db.get_all_bot_chats()
         usage = await db.get_resource_usage()
@@ -1462,6 +1545,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         set_state(user_id, "adm_broadcast_buttons_added",
                   bc_group=sd.get("bc_group"),
                   bc_tariff_id=sd.get("bc_tariff_id"),
+                  bc_excluded_ids=sd.get("bc_excluded_ids"),
                   bc_text=sd.get("bc_text"),
                   bc_media=sd.get("bc_media"),
                   bc_buttons=buttons)
@@ -1859,6 +1943,68 @@ async def handle_admin_message(
         return False
 
     state_data = user_states.get(user_id, {})
+
+    # ── Ресурсы: ручное добавление chat_id ─────────────────
+    if state == "adm_add_resource":
+        try:
+            resource_chat_id = int(text.strip())
+        except ValueError:
+            await bot.send_message(
+                chat_id,
+                "Введите числовой `chat_id` чата или канала.",
+                keyboard=akb.admin_back_to_settings_menu(),
+            )
+            return True
+
+        try:
+            info = await bot.get_chat_info(resource_chat_id)
+        except Exception as e:
+            await bot.send_message(
+                chat_id,
+                f"❌ Не удалось получить ресурс: {e}",
+                keyboard=akb.admin_back_to_settings_menu(),
+            )
+            return True
+
+        status = info.get("status")
+        if info.get("chat_id") and int(info["chat_id"]) != resource_chat_id:
+            resource_chat_id = int(info["chat_id"])
+        if not info.get("chat_id") and not info.get("title"):
+            await bot.send_message(
+                chat_id,
+                f"❌ MAX не вернул информацию о ресурсе. Ответ: {info}",
+                keyboard=akb.admin_back_to_settings_menu(),
+            )
+            return True
+        if status and status != "active":
+            await bot.send_message(
+                chat_id,
+                f"❌ Ресурс найден, но бот не активен в нём (status={status}).",
+                keyboard=akb.admin_back_to_settings_menu(),
+            )
+            return True
+
+        title = info.get("title") or str(resource_chat_id)
+        await db.upsert_bot_chat(
+            resource_chat_id,
+            title=title,
+            link=info.get("link", ""),
+            is_channel=info.get("type") == "channel" or info.get("is_channel", False),
+        )
+
+        clear_state(user_id)
+        chats = await db.get_all_bot_chats()
+        usage = await db.get_resource_usage()
+        chat_ids_in_list = {c.get("chat_id") for c in chats}
+        for cid, _ in usage.items():
+            if cid not in chat_ids_in_list:
+                chats.append({"chat_id": cid, "title": f"❓ {cid} (недоступен)"})
+        await bot.send_message(
+            chat_id,
+            f"✅ Ресурс «{title}» добавлен.\n\n📋 Ресурсы бота (чаты/каналы).",
+            keyboard=akb.admin_resources_list(chats, usage),
+        )
+        return True
 
     # ── Создание тарифа: ввод названия ────────────────────
     if state == "adm_create_name":

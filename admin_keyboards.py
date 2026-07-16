@@ -8,6 +8,27 @@ def _kb(buttons: list[list[dict]]) -> dict:
     }
 
 
+RESOURCE_PAGE_SIZE = 24
+
+
+def _page_items(items: list[dict], page: int, page_size: int = RESOURCE_PAGE_SIZE) -> tuple[list[dict], int, int]:
+    total = len(items)
+    pages = max(1, (total + page_size - 1) // page_size)
+    page = max(0, min(page, pages - 1))
+    start = page * page_size
+    return items[start:start + page_size], page, pages
+
+
+def _pagination_row(prefix: str, page: int, pages: int) -> list[dict]:
+    row: list[dict] = []
+    if page > 0:
+        row.append({"type": "callback", "text": "⬅️", "payload": f"{prefix}:{page - 1}"})
+    row.append({"type": "callback", "text": f"{page + 1}/{pages}", "payload": f"{prefix}:{page}"})
+    if page + 1 < pages:
+        row.append({"type": "callback", "text": "➡️", "payload": f"{prefix}:{page + 1}"})
+    return row
+
+
 # ── Главное меню админки ──────────────────────────────────────
 
 def admin_main() -> dict:
@@ -139,17 +160,21 @@ def admin_create_go_resources() -> dict:
 
 
 def admin_resource_picker(chats: list[dict], selected_ids: set,
-                          edit_tariff_id: int | None = None) -> dict:
+                          edit_tariff_id: int | None = None,
+                          page: int = 0) -> dict:
     buttons = []
-    for c in chats:
+    page_chats, page, pages = _page_items(chats, page)
+    for c in page_chats:
         chat_id = c.get("chat_id")
         title = c.get("title", c.get("chat_id", "?"))
         icon = "✅" if chat_id in selected_ids else "⬜"
         buttons.append([{
             "type": "callback",
             "text": f"{icon} {title}",
-            "payload": f"adm:res_toggle:{chat_id}",
+            "payload": f"adm:res_toggle:{chat_id}:{page}",
         }])
+    if pages > 1:
+        buttons.append(_pagination_row("adm:res_pick_page", page, pages))
     buttons.append([{"type": "callback", "text": "💾 Сохранить", "payload": "adm:res_save"}])
     if edit_tariff_id:
         buttons.append([{"type": "callback", "text": "🔙 Назад", "payload": f"adm:settings:{edit_tariff_id}"}])
@@ -352,24 +377,34 @@ def admin_subscribers() -> dict:
     ])
 
 
-def admin_resources_list(chats: list[dict], usage: dict[int, list[str]]) -> dict:
-    """Список ресурсов (чатов) с кнопкой удаления.
+def admin_back_to_settings_menu() -> dict:
+    return _kb([
+        [{"type": "callback", "text": "🔙 Назад", "payload": "adm:settings_menu"}],
+    ])
+
+
+def admin_resources_list(chats: list[dict], usage: dict[int, list[str]], page: int = 0) -> dict:
+    """Список ресурсов (чатов) с кнопкой выхода бота.
     usage = {chat_id: [tariff_name, ...]} — какие тарифы используют ресурс."""
     buttons = []
-    for c in chats:
+    page_chats, page, pages = _page_items(chats, page)
+    for c in page_chats:
         cid = c.get("chat_id")
         title = c.get("title", c.get("chat_id", "?"))
         count = len(usage.get(cid, []))
-        label = f"🗑 {title}"
+        label = f"🚪 {title}"
         if count:
             label += f" ({count} тариф.)"
         buttons.append([{
             "type": "callback",
             "text": label,
-            "payload": f"adm:res_del:{cid}",
+            "payload": f"adm:res_delete:{cid}",
         }])
     if not chats:
         buttons.append([{"type": "callback", "text": "Ресурсов нет", "payload": "adm:manage_resources"}])
+    if pages > 1:
+        buttons.append(_pagination_row("adm:manage_resources_page", page, pages))
+    buttons.append([{"type": "callback", "text": "➕ Добавить ресурс по ID", "payload": "adm:res_add_manual"}])
     buttons.append([{"type": "callback", "text": "🔙 Назад", "payload": "adm:settings_menu"}])
     return _kb(buttons)
 
