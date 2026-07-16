@@ -937,7 +937,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
                 chats.append({"chat_id": cid, "title": f"❓ {cid} (недоступен)"})
         await reply(
             "📋 Ресурсы бота (чаты/каналы).\n\n"
-            "Нажмите на ресурс, чтобы бот вышел из него и отвязал его от всех тарифов.",
+            "Нажмите на ресурс, чтобы открыть подтверждение удаления.",
             keyboard=akb.admin_resources_list(chats, usage),
         )
 
@@ -951,7 +951,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
                 chats.append({"chat_id": cid, "title": f"❓ {cid} (недоступен)"})
         await reply(
             "📋 Ресурсы бота (чаты/каналы).\n\n"
-            "Нажмите на ресурс, чтобы бот вышел из него и отвязал его от всех тарифов.",
+            "Нажмите на ресурс, чтобы открыть подтверждение удаления.",
             keyboard=akb.admin_resources_list(chats, usage, page=page),
         )
 
@@ -965,12 +965,31 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
     elif payload.startswith("adm:res_delete:"):
         cid = int(payload.split(":")[2])
         chats = await db.get_all_bot_chats()
+        usage = await db.get_resource_usage()
         title = str(cid)
         for c in chats:
             if c.get("chat_id") == cid:
                 title = c.get("title", str(cid))
                 break
+        tariff_names = usage.get(cid, [])
+        text = f"Удалить ресурс **{title}**?\n\n"
+        if tariff_names:
+            text += "Используется в тарифах:\n"
+            text += "\n".join(f" • {n}" for n in tariff_names)
+            text += "\n\nРесурс будет отвязан от всех тарифов."
+        else:
+            text += "Не привязан ни к одному тарифу."
+        text += "\nБот покинет этот чат."
+        await reply(text, keyboard=akb.admin_confirm_res_delete(cid))
 
+    elif payload.startswith("adm:res_delete_confirm:"):
+        cid = int(payload.split(":")[2])
+        chats = await db.get_all_bot_chats()
+        title = str(cid)
+        for c in chats:
+            if c.get("chat_id") == cid:
+                title = c.get("title", str(cid))
+                break
         left = await bot.leave_chat(cid)
         await db.delete_resource_from_all_tariffs(cid)
         if left:

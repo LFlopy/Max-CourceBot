@@ -411,7 +411,7 @@ def admin_resources_list(chats: list[dict], usage: dict[int, list[str]], page: i
 
 def admin_confirm_res_delete(chat_id: int) -> dict:
     return _kb([
-        [{"type": "callback", "text": "⚠️ Да, удалить", "payload": f"adm:res_del_confirm:{chat_id}"}],
+        [{"type": "callback", "text": "⚠️ Да, удалить", "payload": f"adm:res_delete_confirm:{chat_id}"}],
         [{"type": "callback", "text": "🔙 Отмена", "payload": "adm:manage_resources"}],
     ])
 
