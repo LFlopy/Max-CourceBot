@@ -898,6 +898,41 @@ async def handle_message(bot: MaxBot, update: dict):
         await handle_start(bot, chat_id, sender)
         return
 
+    # /chat_id — служебная команда для добавления чата/канала в ресурсы.
+    if text.startswith("/chat_id"):
+        if chat_id == user_id:
+            await bot.send_message(
+                chat_id,
+                f"Текущий dialog/user_id: `{chat_id}`\n"
+                "Чтобы получить ID ресурса, отправьте /chat_id в нужном групповом чате или канале.",
+            )
+            return
+
+        title = str(chat_id)
+        saved = False
+        try:
+            info = await bot.get_chat_info(chat_id)
+            chat_type = info.get("type")
+            status = info.get("status")
+            title = info.get("title") or title
+            if chat_type in ("chat", "channel") and status == "active":
+                await db.upsert_bot_chat(
+                    int(info.get("chat_id") or chat_id),
+                    title=title,
+                    link=info.get("link") or "",
+                    is_channel=chat_type == "channel",
+                )
+                saved = True
+        except Exception as e:
+            print(f"  [/chat_id] не удалось получить инфо chat_id={chat_id}: {e}")
+
+        suffix = "\nРесурс сохранён в каталоге бота." if saved else "\nID можно добавить вручную в админке."
+        await bot.send_message(
+            chat_id,
+            f"chat_id: `{chat_id}`\nНазвание: {title}{suffix}",
+        )
+        return
+
     # Блокируем диалог до принятия оферты
     if not await db.has_terms_agreed(user_id):
         await bot.send_message(chat_id, OFERTA_TEXT, keyboard=kb.consent_buttons())

@@ -225,10 +225,60 @@ async def check_warmup_messages(bot: MaxBot):
 
         await asyncio.sleep(WARMUP_CHECK_INTERVAL)
 
+
+def _extract_event_chat_id(upd: dict) -> int | None:
+    """Достаёт chat_id из разных форм Update, если событие относится к чату."""
+    chat_id = upd.get("chat_id")
+    if chat_id:
+        return int(chat_id)
+
+    msg = upd.get("message") or {}
+    recipient = msg.get("recipient") or {}
+    chat_id = recipient.get("chat_id")
+    if chat_id:
+        return int(chat_id)
+
+    callback = upd.get("callback") or {}
+    callback_message = callback.get("message") or {}
+    recipient = callback_message.get("recipient") or {}
+    chat_id = recipient.get("chat_id")
+    if chat_id:
+        return int(chat_id)
+
+    return None
+
+
+async def remember_chat_from_update(bot: MaxBot, upd: dict) -> None:
+    """Поддерживает локальный каталог ресурсов по любому событию из чата."""
+    chat_id = _extract_event_chat_id(upd)
+    if not chat_id:
+        return
+
+    try:
+        info = await bot.get_chat_info(chat_id)
+    except Exception as e:
+        print(f"  [chat_catalog] не удалось получить инфо chat_id={chat_id}: {e}")
+        return
+
+    chat_type = info.get("type")
+    status = info.get("status")
+    if chat_type not in ("chat", "channel") or status != "active":
+        return
+
+    await db.upsert_bot_chat(
+        int(info.get("chat_id") or chat_id),
+        title=info.get("title") or str(chat_id),
+        link=info.get("link") or "",
+        is_channel=chat_type == "channel",
+    )
+
+
 async def process_update(bot: MaxBot, upd: dict) -> None:
     """Обрабатывает один Update от MAX (одинаково для polling и webhook)."""
     try:
         update_type = upd.get("update_type", "")
+
+        await remember_chat_from_update(bot, upd)
 
         # ── Чат/канал: бот добавлен ──────────────────────────
         if update_type == "bot_added":
@@ -313,8 +363,15 @@ async def handle_max_webhook(request: web.Request) -> web.Response:
         print(f"  [max-webhook] ❌ Не удалось распарсить JSON: {e}")
         return web.Response(status=400, text="Bad Request")
 
-    # Обрабатываем в фоне, чтобы быстро вернуть 200 OK
-    asyncio.create_task(process_update(bot, upd))
+    # Обрабатываем в фоне, чтобы быстро вернуть 200 OK.
+    # MAX документирует одиночный Update, но поддерживаем и пакетную форму.
+    updates = upd.get("updates") if isinstance(upd, dict) else None
+    if isinstance(updates, list):
+        for item in updates:
+            if isinstance(item, dict):
+                asyncio.create_task(process_update(bot, item))
+    else:
+        asyncio.create_task(process_update(bot, upd))
     return web.Response(text="OK", status=200)
 
 
