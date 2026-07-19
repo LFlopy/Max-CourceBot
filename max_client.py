@@ -1,13 +1,14 @@
-"""Клиент MAX Bot API — проверенный формат."""
 
 import json
 import asyncio
 import aiohttp
 
 API = "https://platform-api2.max.ru"
+REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
 
 
 class MaxBot:
+    """Client for the MAX Bot API."""
     def __init__(self, token: str):
         self.token = token
         self.headers = {
@@ -17,29 +18,30 @@ class MaxBot:
         self._session: aiohttp.ClientSession | None = None
 
     async def start(self):
-        self._session = aiohttp.ClientSession()
+        """Call the MAX Bot API."""
+        self._session = aiohttp.ClientSession(timeout=REQUEST_TIMEOUT)
 
     async def stop(self):
+        """Call the MAX Bot API."""
         if self._session:
             await self._session.close()
 
-    # ── Базовый запрос ───────────────────────────────────────
     async def _request(self, method: str, path: str, **kwargs) -> tuple[int, dict]:
         url = f"{API}{path}"
         async with self._session.request(method, url, headers=self.headers, **kwargs) as r:
             try:
                 data = await r.json()
-            except:
+            except Exception:
                 data = {"raw": await r.text()}
             return r.status, data
 
-    # ── Инфо о боте ──────────────────────────────────────────
     async def get_me(self) -> dict:
+        """Call the MAX Bot API."""
         _, data = await self._request("GET", "/me")
         return data
 
-    # ── Удаление webhook-ов ──────────────────────────────────
     async def cleanup_webhooks(self):
+        """Call the MAX Bot API."""
         _, data = await self._request("GET", "/subscriptions")
         subs = data.get("subscriptions", [])
         for sub in subs:
@@ -50,7 +52,6 @@ class MaxBot:
         if not subs:
             print("  Webhook-ов нет")
 
-    # ── Подписка на webhook ──────────────────────────────────
     async def subscribe_webhook(
         self,
         url: str,
@@ -80,7 +81,6 @@ class MaxBot:
             return False
         return True
 
-    # ── Отправка сообщения ───────────────────────────────────
     async def send_message(
         self,
         chat_id: int,
@@ -88,13 +88,13 @@ class MaxBot:
         keyboard: dict | None = None,
         fmt: str | None = None,
     ) -> dict:
+        """Call the MAX Bot API."""
         payload = {"text": text}
         if fmt:
             payload["format"] = fmt
         if keyboard:
             payload["attachments"] = [keyboard]
 
-        # Пробуем chat_id, потом user_id
         status, data = await self._request(
             "POST", "/messages",
             params={"chat_id": chat_id},
@@ -143,7 +143,6 @@ class MaxBot:
             )
         return data
 
-    # ── Редактирование сообщения ─────────────────────────────
     async def edit_message(
         self,
         message_id: str,
@@ -168,7 +167,6 @@ class MaxBot:
             return False
         return True
 
-    # ── Загрузка файла ───────────────────────────────────────
     async def upload_file(self, file_path: str, file_name: str,
                           file_type: str = "file") -> dict | None:
         """Загружает файл в два шага: получает URL, затем отправляет файл."""
@@ -191,7 +189,6 @@ class MaxBot:
                 print(f"  upload ERROR step2: {r.status}, {await r.text()}")
                 return None
 
-    # ── Отправка файла ─────────────────────────────────────────
     async def send_file(self, chat_id: int, file_path: str, file_name: str,
                         text: str = "") -> dict:
         """Загружает и отправляет файл пользователю."""
@@ -224,15 +221,15 @@ class MaxBot:
             break
         return data
 
-    # ── Ответ на callback ────────────────────────────────────
     async def answer_callback(self, callback_id: str, text: str = ""):
+        """Call the MAX Bot API."""
         payload = {"callback_id": callback_id}
         if text:
             payload["notification"] = text
         await self._request("POST", "/answers", json=payload)
 
-    # ── Добавление участника в чат ────────────────────────────
     async def add_chat_member(self, chat_id: int, user_ids: list[int]) -> bool:
+        """Call the MAX Bot API."""
         status, data = await self._request(
             "POST", f"/chats/{chat_id}/members",
             json={"user_ids": user_ids},
@@ -242,8 +239,8 @@ class MaxBot:
             return False
         return True
 
-    # ── Проверка участия в чате ──────────────────────────────
     async def is_chat_member(self, chat_id: int, user_id: int) -> bool:
+        """Call the MAX Bot API."""
         status, data = await self._request(
             "GET", f"/chats/{chat_id}/members",
             params={"user_ids": user_id},
@@ -256,8 +253,8 @@ class MaxBot:
                 return True
         return False
 
-    # ── Удаление участника из чата ────────────────────────────
     async def remove_chat_member(self, chat_id: int, user_id: int) -> bool:
+        """Call the MAX Bot API."""
         status, data = await self._request(
             "DELETE", f"/chats/{chat_id}/members",
             params={"user_id": user_id},
@@ -267,8 +264,8 @@ class MaxBot:
             return False
         return True
 
-    # ── Выход из чата ────────────────────────────────────────
     async def leave_chat(self, chat_id: int) -> bool:
+        """Call the MAX Bot API."""
         status, data = await self._request(
             "DELETE", f"/chats/{chat_id}/members/me",
         )
@@ -277,7 +274,6 @@ class MaxBot:
             return False
         return True
 
-    # ── Получить чаты бота (СПИСОК) ──────────────────────────
     async def get_chats(self) -> list[dict]:
         """GET /chats — список всех чатов бота.
         ⚠️ MAX больше не поддерживает этот метод. Оставлен только для старых
@@ -286,7 +282,6 @@ class MaxBot:
         _, data = await self._request("GET", "/chats")
         return data.get("chats", [])
 
-    # ── Получить один чат по id (НЕ депрекейтится) ───────────
     async def get_chat_info(self, chat_id: int) -> dict:
         """GET /chats/{chatId} — инфа по одному чату/каналу (title, link и т.д.).
         Используется на событии bot_added, т.к. само событие Update
@@ -294,8 +289,8 @@ class MaxBot:
         _, data = await self._request("GET", f"/chats/{chat_id}")
         return data
 
-    # ── Long polling ─────────────────────────────────────────
     async def poll(self, marker: int | None = None) -> dict:
+        """Call the MAX Bot API."""
         params = {
             "timeout": 30,
             "types": "bot_started,message_created,message_callback",

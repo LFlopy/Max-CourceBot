@@ -1,4 +1,5 @@
-"""Вспомогательные утилиты."""
+
+import re
 
 
 class _SafeFormatDict(dict):
@@ -14,6 +15,52 @@ def format_template(template: str, **context) -> str:
         return template.format_map(_SafeFormatDict(context))
     except ValueError:
         return template
+
+
+def parse_duration_to_minutes(text: str) -> int | None:
+    """Парсит короткую длительность и возвращает минуты."""
+    value = (text or "").strip().lower()
+    if not value:
+        return None
+
+    match = re.search(r"(\d+)\s*(ч|час|часа|часов|h)\b", value)
+    if match:
+        return int(match.group(1)) * 60
+
+    match = re.search(r"(\d+)\s*(м|мин|минута|минуты|минут|m)\b", value)
+    if match:
+        return int(match.group(1))
+
+    if re.fullmatch(r"\d+", value):
+        return int(value)
+
+    return None
+
+
+def build_prodamus_webhook_url(base_url: str, path: str = "/prodamus/webhook") -> str:
+    """Собирает URL webhook Prodamus без дублирования path."""
+    base = (base_url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    normalized_path = "/" + path.strip("/")
+    if base.endswith(normalized_path):
+        return base
+    return f"{base}{normalized_path}"
+
+
+def redact_headers(headers: dict) -> dict:
+    """Маскирует секреты в заголовках перед логированием."""
+    return redact_mapping(headers)
+
+
+def redact_mapping(data: dict) -> dict:
+    """Маскирует чувствительные поля словаря перед логированием."""
+    secret_parts = ("authorization", "secret", "token", "sign", "cookie", "password")
+    redacted = {}
+    for key, value in data.items():
+        key_text = str(key).lower()
+        redacted[key] = "***" if any(part in key_text for part in secret_parts) else value
+    return redacted
 
 
 def build_user_name(user: dict | None, fallback: str = "") -> str:
@@ -56,5 +103,5 @@ def build_user_template_context(user: dict | None, fallback: str = "") -> dict[s
 
 def user_link(name: str, user_id: int) -> str:
     """Возвращает Markdown-ссылку на профиль пользователя в MAX."""
-    safe_name = name.replace("[", "").replace("]", "").replace("(", "").replace(")", "")
+    safe_name = re.sub(r"[][()_*`~>#|{}.!-]", "", name)
     return f"[{safe_name}](max://user/{user_id})"

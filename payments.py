@@ -1,4 +1,3 @@
-"""Модуль оплаты — интеграция с платёжными системами."""
 
 import hmac
 import hashlib
@@ -10,8 +9,6 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=10)
 
-# Для большинства интеграций Альфа/Сбер совместим REST-gateway:
-# https://<host>/payment/rest/{method}
 ALFABANK_BASE_URL = "https://payment.alfabank.ru/payment/rest"
 
 
@@ -19,11 +16,18 @@ _shared_session: aiohttp.ClientSession | None = None
 
 
 def _get_session() -> aiohttp.ClientSession:
-    """Один общий session на модуль (не создаём каждый раз)."""
     global _shared_session
     if _shared_session is None or _shared_session.closed:
         _shared_session = aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT)
     return _shared_session
+
+
+async def close_session() -> None:
+    """Close the shared payments HTTP session."""
+    global _shared_session
+    if _shared_session and not _shared_session.closed:
+        await _shared_session.close()
+    _shared_session = None
 
 
 async def _request_json(
@@ -37,7 +41,6 @@ async def _request_json(
     headers: dict | None = None,
     retries: int = 3,
 ) -> tuple[int, dict | None]:
-    """HTTP JSON request с retry. Возвращает (status, data|None)."""
     last_exc: Exception | None = None
     for attempt in range(1, retries + 1):
         try:
@@ -53,7 +56,6 @@ async def _request_json(
                 try:
                     data = await r.json(content_type=None)
                 except Exception:
-                    # Иногда API отвечает текстом/HTML даже при 200
                     raw = await r.text()
                     logger.warning("Non-JSON response %s %s: %s", method, url, raw[:500])
                     return status, None
@@ -92,6 +94,7 @@ class YooKassaProvider(PaymentProvider):
 
     async def create_payment(self, amount: float, description: str,
                              metadata: dict | None = None) -> dict | None:
+        """Create a payment with the provider."""
         payload = {
             "amount": {"value": f"{amount:.2f}", "currency": "RUB"},
             "confirmation": {"type": "redirect", "return_url": "https://max.ru"},
@@ -129,6 +132,7 @@ class YooKassaProvider(PaymentProvider):
             return None
 
     async def check_payment(self, payment_id: str) -> str:
+        """Check payment status with the provider."""
         auth = aiohttp.BasicAuth(self.shop_id, self.secret_key)
         try:
             status_code, data = await _request_json(
@@ -169,6 +173,7 @@ class ProdamusProvider(PaymentProvider):
 
     async def create_payment(self, amount: float, description: str,
                              metadata: dict | None = None) -> dict | None:
+        """Create a payment with the provider."""
         if not self.payform_url.startswith("http"):
             logger.error("[prodamus] shop_id должен быть payform URL, получено: %r", self.payform_url)
             return None
@@ -205,7 +210,7 @@ class ProdamusProvider(PaymentProvider):
             return None
 
     async def check_payment(self, payment_id: str) -> str:
-        # Prodamus подтверждает через webhook, polling не поддерживается
+        """Check payment status with the provider."""
         return "pending"
 
     @staticmethod
@@ -227,6 +232,7 @@ class AlfaBankProvider(PaymentProvider):
 
     async def create_payment(self, amount: float, description: str,
                              metadata: dict | None = None) -> dict | None:
+        """Create a payment with the provider."""
         order_number = str(uuid.uuid4())
         amount_int = int(round(float(amount) * 100))  # копейки
 
@@ -239,8 +245,6 @@ class AlfaBankProvider(PaymentProvider):
             "description": (description or "")[:128],
         }
         if metadata:
-            # Поддержка дополнительных параметров зависит от настройки банка,
-            # но безопасно передать как jsonParams (распространённый формат).
             params["jsonParams"] = str({str(k): str(v) for k, v in metadata.items()})
 
         try:
@@ -262,6 +266,7 @@ class AlfaBankProvider(PaymentProvider):
             return None
 
     async def check_payment(self, payment_id: str) -> str:
+        """Check payment status with the provider."""
         params = {
             "userName": str(self.userName),
             "password": str(self.password),
@@ -279,6 +284,8 @@ class AlfaBankProvider(PaymentProvider):
 
             # В зависимости от версии API поле может называться orderStatus или orderStatusExtended.
             raw = data.get("orderStatus")
+            if raw is None:
+                raw = data.get("orderStatusExtended")
             try:
                 st = int(raw) if raw is not None else None
             except Exception:
@@ -296,7 +303,6 @@ class AlfaBankProvider(PaymentProvider):
             return "pending"
 
 
-# ── Реестр провайдеров ────────────────────────────────────────
 
 PROVIDERS = {
     "yookassa": ("ЮКасса", YooKassaProvider),
