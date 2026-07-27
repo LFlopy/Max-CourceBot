@@ -9,6 +9,9 @@ from handlers import handle_start, handle_callback, handle_message, _activate_pu
 import database as db
 import payments
 from services.background_jobs import (
+    EXPIRY_CHECK_INTERVAL,
+    PAYMENT_CHECK_INTERVAL,
+    WARMUP_CHECK_INTERVAL,
     check_expired_subscriptions,
     check_pending_payments,
     check_warmup_messages,
