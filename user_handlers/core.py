@@ -8,7 +8,12 @@ import admin_keyboards as akb
 from admin_handlers import handle_admin_callback, handle_admin_message
 from fsm import set_state, get_state, clear_state, user_states
 import payments
-from utils import build_prodamus_webhook_url, parse_duration_to_minutes, user_link
+from utils import (
+    build_prodamus_webhook_url,
+    parse_duration_to_minutes,
+    parse_tariff_start_payload,
+    user_link,
+)
 
 
 
@@ -113,6 +118,155 @@ async def _user_can_view_tariff(user_id: int, tariff: dict) -> bool:
         return False
     unlocked_tariff_ids = await db.get_unlocked_tariff_ids(user_id)
     return bool(db.filter_tariffs_by_allowed_group([tariff], unlocked_tariff_ids))
+
+
+def _parse_positive_callback_id(payload: str, prefix: str) -> int | None:
+    if not payload.startswith(prefix):
+        return None
+    raw_id = payload[len(prefix):].strip()
+    if not raw_id.isdigit():
+        return None
+    tariff_id = int(raw_id)
+    return tariff_id if tariff_id > 0 else None
+
+
+def _limited_payload(value: str, limit: int = 128) -> str:
+    text = str(value or "").strip()
+    return text[:limit]
+
+
+async def show_main_menu(
+    bot: MaxBot,
+    chat_id: int,
+    user_id: int,
+    *,
+    source: str = "unknown",
+    send_fn=None,
+) -> None:
+    """Показывает актуальное главное меню с динамической клавиатурой."""
+    clear_state(user_id)
+    btn = await db.get_button_texts(user_id=user_id)
+    cabinet_text = await db.get_bot_text("desc_cabinet", user_id=user_id)
+    if send_fn:
+        await send_fn(cabinet_text, kb.main_menu(user_id, btn=btn))
+    else:
+        await bot.send_message(chat_id, cabinet_text, keyboard=kb.main_menu(user_id, btn=btn))
+    if source not in ("start", "callback"):
+        await db.add_user_log(user_id, f"Открыл главное меню ({source})")
+
+
+async def show_catalog(
+    bot: MaxBot,
+    chat_id: int,
+    user_id: int,
+    *,
+    send_fn=None,
+) -> None:
+    btn = await db.get_button_texts(user_id=user_id)
+    visible = await _get_visible_tariffs_for_user(user_id)
+    catalog_text = await db.get_bot_text("desc_catalog", user_id=user_id)
+    keyboard = kb.start_catalog(visible, user_id, btn=btn)
+    if send_fn:
+        await send_fn(catalog_text, keyboard)
+    else:
+        await bot.send_message(chat_id, catalog_text, keyboard=keyboard)
+
+
+async def show_tariff_details(
+    bot: MaxBot,
+    chat_id: int,
+    user_id: int,
+    tariff_id: int,
+    *,
+    source: str = "catalog",
+    send_fn=None,
+) -> bool:
+    """Показывает карточку тарифа единым способом для каталога и deep link."""
+    btn = await db.get_button_texts(user_id=user_id)
+
+    async def _send(text: str, keyboard=None):
+        if send_fn:
+            await send_fn(text, keyboard)
+        else:
+            await bot.send_message(chat_id, text, keyboard=keyboard)
+
+    tariff = await db.get_tariff(tariff_id)
+    if not tariff:
+        return False
+
+    if not await _user_can_view_tariff(user_id, tariff):
+        visible = await _get_visible_tariffs_for_user(user_id)
+        await _send(
+            "Этот тариф сейчас недоступен для оформления.\n\n"
+            "Вы можете выбрать другой курс в каталоге.",
+            kb.tariff_list(visible),
+        )
+        return True
+
+    user_tariff_ids = await db.get_active_tariff_ids(user_id)
+    if tariff_id in user_tariff_ids:
+        await _send(
+            "✅ У вас уже есть активная подписка на этот тариф.",
+            kb.main_menu(user_id, btn=btn),
+        )
+        return True
+
+    if tariff["is_free"]:
+        price_str = "бесплатно"
+    elif tariff.get("old_price"):
+        price_str = f"~~{tariff['old_price']}₽~~ **{tariff['price']}₽**"
+    else:
+        price_str = f"**{tariff['price']}₽**"
+
+    duration_str = _format_course_duration(tariff)
+    duration_line = f"\n⏰ {duration_str}" if duration_str else ""
+    text = (
+        f"📌 **{tariff['name']}**\n"
+        f"💰 Цена: {price_str}"
+        f"{duration_line}\n\n"
+        f"{tariff.get('description') or ''}"
+    )
+    await _send(
+        text.strip(),
+        keyboard=kb.tariff_detail_buttons(tariff_id, tariff["is_free"]),
+    )
+    if source == "deep_link":
+        await db.add_user_log(user_id, f"Открыл тариф «{tariff['name']}» по прямой ссылке")
+    return True
+
+
+async def process_start_payload(
+    bot: MaxBot,
+    chat_id: int,
+    user_id: int,
+    start_payload: str,
+) -> bool:
+    payload = str(start_payload or "").strip()
+    if not payload:
+        return False
+
+    tariff_id = parse_tariff_start_payload(payload)
+    if tariff_id is None:
+        await db.add_user_log(user_id, f"Перешёл по неизвестному start payload: {_limited_payload(payload)}")
+        return False
+
+    handled = await show_tariff_details(
+        bot,
+        chat_id,
+        user_id,
+        tariff_id,
+        source="deep_link",
+    )
+    if not handled:
+        await db.add_user_log(user_id, f"Перешёл по недействительной ссылке на тариф: tariff_{tariff_id}")
+        visible = await _get_visible_tariffs_for_user(user_id)
+        await bot.send_message(
+            chat_id,
+            "К сожалению, этот тариф больше недоступен.\n\n"
+            "Вы можете выбрать другой курс в каталоге.",
+            keyboard=kb.tariff_list(visible),
+        )
+    return True
 
 
 async def _activate_purchase(bot: MaxBot, purchase: dict):
@@ -236,10 +390,7 @@ async def _activate_purchase(bot: MaxBot, purchase: dict):
                     links_text + "\n" + "\n".join(f"• {n}" for n in res_names),
                 )
 
-    btn = await db.get_button_texts(user_id=user_id)
-    visible = await _get_visible_tariffs_for_user(user_id)
-    catalog_text = await db.get_bot_text("desc_catalog", user_id=user_id)
-    await bot.send_message(user_id, catalog_text, keyboard=kb.start_catalog(visible, user_id, btn=btn))
+    await show_catalog(bot, user_id, user_id)
     return True
 
 
@@ -322,21 +473,16 @@ async def _do_create_payment(bot: MaxBot, user_id: int, tariff_id: int,
 
 async def _send_welcome_catalog(bot: MaxBot, chat_id: int, user_id: int):
     await bot.send_message(chat_id, await db.get_bot_text("welcome", user_id=user_id))
-    btn = await db.get_button_texts(user_id=user_id)
-    visible = await _get_visible_tariffs_for_user(user_id)
-    catalog_text = await db.get_bot_text("desc_catalog", user_id=user_id)
-    await bot.send_message(
-        chat_id, catalog_text,
-        keyboard=kb.start_catalog(visible, user_id, btn=btn),
-    )
+    await show_catalog(bot, chat_id, user_id)
 
 
-async def handle_start(bot: MaxBot, chat_id: int, sender: dict):
+async def handle_start(bot: MaxBot, chat_id: int, sender: dict, start_payload: str = ""):
     """Команда /start или bot_started."""
     user_id = int(sender.get("user_id", 0))
     if not user_id:
         return
     clear_state(user_id)
+    start_payload = str(start_payload or "").strip()
 
     first_name = sender.get("first_name", "")
     last_name = sender.get("last_name", "")
@@ -360,6 +506,10 @@ async def handle_start(bot: MaxBot, chat_id: int, sender: dict):
 
     await db.add_user_log(user_id, "Впервые зашёл в бота" if is_new else "Вызвал /start")
 
+    if await db.is_user_banned(user_id):
+        await bot.send_message(chat_id, "⛔ Вы заблокированы.")
+        return
+
     if is_new:
         full_name = f"{first_name} {last_name}".strip() or "—"
         for admin_id in ADMIN_IDS:
@@ -374,7 +524,12 @@ async def handle_start(bot: MaxBot, chat_id: int, sender: dict):
                 pass
 
     if not await db.has_terms_agreed(user_id):
+        if start_payload:
+            set_state(user_id, "waiting_terms", start_payload=start_payload)
         await bot.send_message(chat_id, OFERTA_TEXT, keyboard=kb.consent_buttons())
+        return
+
+    if await process_start_payload(bot, chat_id, user_id, start_payload):
         return
 
     await _send_welcome_catalog(bot, chat_id, user_id)
@@ -405,8 +560,13 @@ async def handle_callback(bot: MaxBot, update: dict):
         return
 
     if payload == "agree_terms":
+        state_data = user_states.get(user_id, {})
+        pending_payload = state_data.get("start_payload", "") if state_data.get("state") == "waiting_terms" else ""
         await db.set_terms_agreed(user_id)
         await db.add_user_log(user_id, "Принял оферту и политику конфиденциальности")
+        clear_state(user_id)
+        if await process_start_payload(bot, chat_id, user_id, pending_payload):
+            return
         await _send_welcome_catalog(bot, chat_id, user_id)
         return
 
@@ -421,13 +581,14 @@ async def handle_callback(bot: MaxBot, update: dict):
         if not ok:
             await bot.send_message(chat_id, text, keyboard=keyboard)
 
-    if payload == "back_main":
-        clear_state(user_id)
-        cabinet_text = await db.get_bot_text("desc_cabinet", user_id=user_id)
-        await reply(cabinet_text, keyboard=kb.main_menu(user_id, btn=btn))
+    if payload in {"back_main", "main_menu"}:
+        await show_main_menu(bot, chat_id, user_id, source="callback", send_fn=reply)
 
     elif payload.startswith("get_bonus_tariff:"):
-        tariff_id = int(payload.split(":", 1)[1])
+        tariff_id = _parse_positive_callback_id(payload, "get_bonus_tariff:")
+        if tariff_id is None:
+            await reply("❌ Некорректный тариф.", keyboard=kb.main_menu(user_id, btn=btn))
+            return
         gifts = await db.get_gift_files_for_tariffs([tariff_id])
         if not gifts:
             await reply("К этому тарифу бонусов не предусмотрено",
@@ -450,38 +611,26 @@ async def handle_callback(bot: MaxBot, update: dict):
 
     elif payload.startswith("tariff:"):
         clear_state(user_id)
-        tariff_id = int(payload.split(":", 1)[1])
-        tariff = await db.get_tariff(tariff_id)
-        if not tariff:
+        tariff_id = _parse_positive_callback_id(payload, "tariff:")
+        if tariff_id is None:
+            await reply("❌ Некорректный тариф.", keyboard=kb.main_menu(user_id, btn=btn))
             return
-        if not await _user_can_view_tariff(user_id, tariff):
-            await reply("❌ Этот тариф вам недоступен.", keyboard=kb.main_menu(user_id, btn=btn))
-            return
-        user_tariff_ids = await db.get_active_tariff_ids(user_id)
-        if tariff_id in user_tariff_ids:
-            await reply("✅ У вас уже есть активная подписка на этот тариф.", keyboard=kb.main_menu(user_id, btn=btn))
-            return
-        if tariff["is_free"]:
-            price_str = "бесплатно"
-        elif tariff.get("old_price"):
-            price_str = f"~~{tariff['old_price']}₽~~ **{tariff['price']}₽**"
-        else:
-            price_str = f"**{tariff['price']}₽**"
-        duration_str = _format_course_duration(tariff)
-        duration_line = f"\n⏰ {duration_str}" if duration_str else ""
-        text = (
-            f"📌 **{tariff['name']}**\n"
-            f"💰 Цена: {price_str}"
-            f"{duration_line}\n\n"
-            f"{tariff.get('description') or ''}"
+        handled = await show_tariff_details(
+            bot,
+            chat_id,
+            user_id,
+            tariff_id,
+            source="catalog",
+            send_fn=reply,
         )
-        await reply(
-            text.strip(),
-            keyboard=kb.tariff_detail_buttons(tariff_id, tariff["is_free"]),
-        )
+        if not handled:
+            await reply("К сожалению, этот тариф больше недоступен.", keyboard=kb.main_menu(user_id, btn=btn))
 
     elif payload.startswith("pay:"):
-        tariff_id = int(payload.split(":", 1)[1])
+        tariff_id = _parse_positive_callback_id(payload, "pay:")
+        if tariff_id is None:
+            await reply("❌ Некорректный тариф.", keyboard=kb.main_menu(user_id, btn=btn))
+            return
         tariff = await db.get_tariff(tariff_id)
         if not tariff:
             return
@@ -506,7 +655,10 @@ async def handle_callback(bot: MaxBot, update: dict):
         )
 
     elif payload.startswith("promo_skip:"):
-        tariff_id = int(payload.split(":", 1)[1])
+        tariff_id = _parse_positive_callback_id(payload, "promo_skip:")
+        if tariff_id is None:
+            await reply("❌ Некорректный тариф.", keyboard=kb.main_menu(user_id, btn=btn))
+            return
         state_data = user_states.get(user_id, {})
         base_price = state_data.get("base_price", 0)
         tariff_tmp = await db.get_tariff(tariff_id)
@@ -516,6 +668,8 @@ async def handle_callback(bot: MaxBot, update: dict):
         if tariff_tmp and tariff_tmp.get("payment_link"):
             pay_kb = {"type": "inline_keyboard", "payload": {"buttons": [[
                 {"type": "link", "text": "💳 Перейти к оплате", "url": tariff_tmp["payment_link"]}
+            ], [
+                {"type": "callback", "text": "🏠 Главное меню", "payload": "main_menu"}
             ]]}}
             await reply(f"💳 Для оплаты тарифа **{tariff_tmp['name']}** перейдите по ссылке:", keyboard=pay_kb)
             await db.add_user_log(user_id, f"Вызвал оплату тарифа «{tariff_tmp['name']}»")
@@ -618,7 +772,10 @@ async def handle_callback(bot: MaxBot, update: dict):
         )
 
     elif payload.startswith("check_pay:"):
-        purchase_id = int(payload.split(":", 1)[1])
+        purchase_id = _parse_positive_callback_id(payload, "check_pay:")
+        if purchase_id is None:
+            await reply("❌ Платёж не найден.", keyboard=kb.main_menu(user_id, btn=btn))
+            return
         purchase = await db.get_purchase(purchase_id)
 
         if not purchase:
@@ -671,7 +828,10 @@ async def handle_callback(bot: MaxBot, update: dict):
             )
 
     elif payload.startswith("activate:"):
-        tariff_id = int(payload.split(":", 1)[1])
+        tariff_id = _parse_positive_callback_id(payload, "activate:")
+        if tariff_id is None:
+            await reply("❌ Некорректный тариф.", keyboard=kb.main_menu(user_id, btn=btn))
+            return
         tariff = await db.get_tariff(tariff_id)
         if not tariff:
             return
@@ -733,15 +893,12 @@ async def handle_callback(bot: MaxBot, update: dict):
         elif has_bonus:
             await reply(free_text, keyboard=kb._kb([
                 [{"type": "callback", "text": "🎁 Получить бонус", "payload": f"get_bonus_tariff:{tariff_id}"}],
-                [{"type": "callback", "text": "🔙 Назад", "payload": "back_main"}],
+                [{"type": "callback", "text": "🏠 Главное меню", "payload": "main_menu"}],
             ]))
         else:
-            await reply(free_text)
+            await reply(free_text, keyboard=kb.main_menu(user_id, btn=btn))
 
-        visible = await _get_visible_tariffs_for_user(user_id)
-        catalog_text = await db.get_bot_text("desc_catalog", user_id=user_id)
-        btn = await db.get_button_texts(user_id=user_id)
-        await bot.send_message(chat_id, catalog_text, keyboard=kb.start_catalog(visible, user_id, btn=btn))
+        await show_catalog(bot, chat_id, user_id)
 
     elif payload == "my_subs":
         subs = await db.get_active_subscriptions_with_resources(user_id)
@@ -778,7 +935,7 @@ async def handle_callback(bot: MaxBot, update: dict):
 
     elif payload == "cancel_feedback":
         clear_state(user_id)
-        await reply("Выберите действие:", keyboard=kb.main_menu(user_id, btn=btn))
+        await show_main_menu(bot, chat_id, user_id, source="callback", send_fn=reply)
 
 
 async def handle_message(bot: MaxBot, update: dict):
@@ -808,7 +965,26 @@ async def handle_message(bot: MaxBot, update: dict):
                 return
 
     if text.startswith("/start"):
-        await handle_start(bot, chat_id, sender)
+        parts = text.split(maxsplit=1)
+        start_payload = parts[1] if len(parts) > 1 else ""
+        await handle_start(bot, chat_id, sender, start_payload=start_payload)
+        return
+
+    if text.startswith("/menu"):
+        await db.upsert_user(
+            user_id,
+            first_name=sender.get("first_name", ""),
+            last_name=sender.get("last_name", ""),
+            username=sender.get("username", ""),
+        )
+        if await db.is_user_banned(user_id):
+            await bot.send_message(chat_id, "⛔ Вы заблокированы.")
+            return
+        if not await db.has_terms_agreed(user_id):
+            clear_state(user_id)
+            await bot.send_message(chat_id, OFERTA_TEXT, keyboard=kb.consent_buttons())
+            return
+        await show_main_menu(bot, chat_id, user_id, source="menu_command")
         return
 
     if text.startswith("/chat_id"):
@@ -898,6 +1074,8 @@ async def handle_message(bot: MaxBot, update: dict):
                 f"💳 Для оплаты перейдите по ссылке:",
                 keyboard={"type": "inline_keyboard", "payload": {"buttons": [[
                     {"type": "link", "text": "💳 Перейти к оплате", "url": tariff["payment_link"]}
+                ], [
+                    {"type": "callback", "text": "🏠 Главное меню", "payload": "main_menu"}
                 ]]}},
             )
             clear_state(user_id)

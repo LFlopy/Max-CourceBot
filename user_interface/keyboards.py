@@ -60,7 +60,7 @@ def my_subs_buttons(subscriptions: list[dict]) -> dict:
             if link:
                 title = res.get("chat_title") or s.get("tariff_name", "Ресурс")
                 buttons.append([{"type": "link", "text": f"🔗 {title}", "url": link}])
-    buttons.append([{"type": "callback", "text": "🔙 Назад", "payload": "back_main"}])
+    buttons.append([{"type": "callback", "text": "🏠 Главное меню", "payload": "main_menu"}])
     return _kb(buttons)
 
 
@@ -88,10 +88,12 @@ def tariff_detail_buttons(tariff_id: str, is_free: bool) -> dict:
         return _kb([
             [{"type": "callback", "text": "✅ Активировать тариф", "payload": f"activate:{tariff_id}"}],
             [{"type": "callback", "text": "🔙 Назад", "payload": "back_courses"}],
+            [{"type": "callback", "text": "🏠 Главное меню", "payload": "main_menu"}],
         ])
     return _kb([
         [{"type": "callback", "text": "💳 Оплатить", "payload": f"pay:{tariff_id}"}],
         [{"type": "callback", "text": "🔙 Назад", "payload": "back_courses"}],
+        [{"type": "callback", "text": "🏠 Главное меню", "payload": "main_menu"}],
     ])
 
 
@@ -101,6 +103,7 @@ def promo_input_cancel(tariff_id: int) -> dict:
     return _kb([
         [{"type": "callback", "text": "➡️ Продолжить", "payload": f"promo_skip:{tariff_id}"}],
         [{"type": "callback", "text": "🔙 Назад", "payload": f"tariff:{tariff_id}"}],
+        [{"type": "callback", "text": "🏠 Главное меню", "payload": "main_menu"}],
     ])
 
 
@@ -126,6 +129,7 @@ def payment_created(payment_url: str, purchase_id: int, btn: dict | None = None)
         [{"type": "link", "text": b.get("btn_pay_go", "💳 Перейти к оплате"), "url": payment_url}],
         [{"type": "callback", "text": b.get("btn_pay_check", "🔄 Проверить оплату"), "payload": f"check_pay:{purchase_id}"}],
         [{"type": "callback", "text": "🔙 Назад", "payload": "back_courses"}],
+        [{"type": "callback", "text": "🏠 Главное меню", "payload": "main_menu"}],
     ])
 
 
@@ -135,6 +139,7 @@ def payment_button(payment_link: str) -> dict:
     return _kb([
         [{"type": "link", "text": "💳 Перейти к оплате", "url": payment_link}],
         [{"type": "callback", "text": "🔙 Назад", "payload": "back_courses"}],
+        [{"type": "callback", "text": "🏠 Главное меню", "payload": "main_menu"}],
     ])
 
 
@@ -147,7 +152,7 @@ def channel_link_button(link: str, bonus_tariff_id: int | None = None) -> dict:
     """
     buttons = [
         [{"type": "link", "text": "🔗 Ссылки для доступа", "url": link}],
-        [{"type": "callback", "text": "🔙 Назад", "payload": "back_main"}],
+        [{"type": "callback", "text": "🏠 Главное меню", "payload": "main_menu"}],
     ]
     if bonus_tariff_id is not None:
         buttons.append([
@@ -171,7 +176,7 @@ def resource_links_buttons(resources: list[dict], back_payload: str = "back_main
         if link:
             title = res.get("chat_title") or "Ресурс"
             buttons.append([{"type": "link", "text": f"🔗 {title}", "url": link}])
-    buttons.append([{"type": "callback", "text": "🔙 Назад", "payload": back_payload}])
+    buttons.append([{"type": "callback", "text": "🏠 Главное меню", "payload": "main_menu"}])
     if bonus_tariff_id is not None:
         buttons.append([
             {"type": "callback",
@@ -206,4 +211,5 @@ def feedback_cancel() -> dict:
     """Return a user inline keyboard."""
     return _kb([
         [{"type": "callback", "text": "❌ Отмена", "payload": "cancel_feedback"}],
+        [{"type": "callback", "text": "🏠 Главное меню", "payload": "main_menu"}],
     ])

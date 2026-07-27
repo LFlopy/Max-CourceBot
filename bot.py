@@ -139,6 +139,18 @@ async def process_update(bot: MaxBot, upd: dict) -> None:
                 await db.update_bot_chat_title(chat_id, new_title)
             return
 
+        if update_type == "bot_started":
+            user_info = upd.get("user", {})
+            chat_id = int(upd.get("chat_id") or user_info.get("user_id", 0))
+            start_payload = str(
+                upd.get("payload")
+                or upd.get("start_payload")
+                or ""
+            ).strip()
+            print(f"  [bot_started] user_id={user_info.get('user_id')} payload={start_payload[:128]!r}")
+            await handle_start(bot, chat_id, user_info, start_payload=start_payload)
+            return
+
         if "callback" in upd:
             print(f"  [callback] payload={upd['callback'].get('payload', '?')}")
             await handle_callback(bot, upd)
@@ -152,14 +164,16 @@ async def process_update(bot: MaxBot, upd: dict) -> None:
             print(f"  [message] text={text}")
 
             if text.strip().startswith("/start"):
-                await handle_start(bot, chat_id, sender)
+                parts = text.strip().split(maxsplit=1)
+                start_payload = parts[1] if len(parts) > 1 else ""
+                await handle_start(bot, chat_id, sender, start_payload=start_payload)
             else:
                 await handle_message(bot, upd)
 
         elif "user" in upd and "message" not in upd and "callback" not in upd:
             user_info = upd.get("user", {})
             chat_id = int(upd.get("chat_id") or user_info.get("user_id", 0))
-            print(f"  [bot_started] user_id={user_info.get('user_id')}")
+            print(f"  [user-event] user_id={user_info.get('user_id')}")
             await handle_start(bot, chat_id, user_info)
 
     except Exception as e:
@@ -367,21 +381,21 @@ async def main():
     print("✅ БД инициализирована")
 
     bot = MaxBot(BOT_TOKEN)
-    await bot.start()
-
-    me = await bot.get_me()
-    name = me.get("first_name", "?")
-    print(f"✅ Бот: {name} (@{me.get('username', '?')})")
-
-    await bot.cleanup_webhooks()
-
-    await start_webhook_server(bot)
-
-    await subscribe_max_webhook(bot)
-
-    print("🟢 Webhook активен. Отправь /start боту в MAX.")
-    print(f"🔄 Проверка подписок каждые {EXPIRY_CHECK_INTERVAL}с, платежей каждые {PAYMENT_CHECK_INTERVAL}с, догревающих каждые {WARMUP_CHECK_INTERVAL}с\n")
     try:
+        await bot.start()
+
+        me = await bot.get_me()
+        name = me.get("first_name", "?")
+        print(f"✅ Бот: {name} (@{me.get('username', '?')})")
+
+        await bot.cleanup_webhooks()
+
+        await start_webhook_server(bot)
+
+        await subscribe_max_webhook(bot)
+
+        print("🟢 Webhook активен. Отправь /start боту в MAX.")
+        print(f"🔄 Проверка подписок каждые {EXPIRY_CHECK_INTERVAL}с, платежей каждые {PAYMENT_CHECK_INTERVAL}с, догревающих каждые {WARMUP_CHECK_INTERVAL}с\n")
         await asyncio.gather(
             check_expired_subscriptions(bot),
             check_pending_payments(bot),

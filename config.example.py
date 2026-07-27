@@ -7,6 +7,7 @@ DATABASE_URL = "postgresql://user:password@127.0.0.1:5432/dbname"
 WEBHOOK_HOST = "0.0.0.0"
 WEBHOOK_PORT = 8443
 WEBHOOK_BASE_URL = "https://yourdomain.ru"
+MAX_BOT_USERNAME = "MyCourseBot"
 
 MAX_WEBHOOK_PATH = "/max/webhook"
 MAX_WEBHOOK_URL = f"{WEBHOOK_BASE_URL}{MAX_WEBHOOK_PATH}"

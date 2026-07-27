@@ -211,6 +211,7 @@ def admin_tariff_settings(tariff_id: int, is_active: bool) -> dict:
         [{"type": "callback", "text": "👥 Группа разрешённых", "payload": f"adm:set_allowed:{tariff_id}"}],
         [{"type": "callback", "text": "🎁 Бонусный файл", "payload": f"adm:tariff_gifts:{tariff_id}"}],
         [{"type": "callback", "text": "🔥 Догревающие рассылки", "payload": f"adm:warmup_list:{tariff_id}"}],
+        [{"type": "callback", "text": "🔗 Ссылка на тариф", "payload": f"adm:tariff_link:{tariff_id}"}],
         [{"type": "callback", "text": "🛒 Ссылка на покупку", "payload": f"adm:buy_link:{tariff_id}"}],
         [{"type": "callback", "text": "💾 Сохранить", "payload": f"adm:save_settings:{tariff_id}"}],
         [{"type": "callback", "text": hide_text, "payload": f"adm:toggle_active:{tariff_id}"}],

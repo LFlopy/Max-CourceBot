@@ -4,12 +4,14 @@ import tempfile
 from datetime import datetime
 import re
 from max_client import MaxBot
+import config as cfg
 from config import ADMIN_IDS
 import database as db
 import admin_keyboards as akb
 
 from fsm import set_state, get_state, clear_state, user_states
 from utils import (
+    build_tariff_deep_link,
     build_user_name,
     build_user_template_context,
     format_template,
@@ -28,6 +30,16 @@ def _parse_duration_to_minutes(text: str) -> int | None:
 
 
 _show_price_in_name = False
+
+
+def _parse_admin_tariff_id(payload: str, prefix: str) -> int | None:
+    if not payload.startswith(prefix):
+        return None
+    raw_id = payload[len(prefix):].strip()
+    if not raw_id.isdigit():
+        return None
+    tariff_id = int(raw_id)
+    return tariff_id if tariff_id > 0 else None
 
 
 async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
@@ -609,6 +621,36 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         tariff = await db.get_tariff(tid)
         await reply("Группа разрешённых обновлена ✅")
         await _show_tariff_settings(reply, tariff)
+
+    elif payload.startswith("adm:tariff_link:"):
+        tid = _parse_admin_tariff_id(payload, "adm:tariff_link:")
+        if tid is None:
+            await bot.send_message(chat_id, "❌ Некорректный ID тарифа.")
+            return True
+
+        tariff = await db.get_tariff(tid)
+        if not tariff:
+            await bot.send_message(chat_id, "❌ Тариф не найден. Возможно, он был удалён.")
+            return True
+
+        try:
+            link = build_tariff_deep_link(getattr(cfg, "MAX_BOT_USERNAME", ""), tid)
+        except ValueError:
+            await bot.send_message(
+                chat_id,
+                "❌ Не задан MAX_BOT_USERNAME.\n\n"
+                "Укажите публичное имя бота в config.py и перезапустите приложение.",
+            )
+            return True
+
+        await bot.send_message(
+            chat_id,
+            f"🔗 Ссылка на тариф «{tariff['name']}»\n\n"
+            f"{link}\n\n"
+            "Ссылку можно использовать в рассылках, публикациях и рекламных материалах.\n"
+            "Пользователь, перешедший по ней, попадёт сразу к оформлению этого тарифа.",
+        )
+        await db.add_user_log(user_id, f"Получил deep link тарифа «{tariff['name']}»")
 
     elif payload.startswith("adm:buy_link:"):
         tid = int(payload.split(":")[2])

@@ -37,6 +37,33 @@ def parse_duration_to_minutes(text: str) -> int | None:
     return None
 
 
+def normalize_bot_username(value: str) -> str:
+    """Нормализует публичное имя MAX-бота для deep link."""
+    return str(value or "").strip().lstrip("@")
+
+
+def parse_tariff_start_payload(payload: str) -> int | None:
+    """Разбирает start payload формата tariff_<positive_integer>."""
+    value = str(payload or "").strip()
+    match = re.fullmatch(r"tariff_([1-9]\d*)", value)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def build_tariff_deep_link(bot_username: str, tariff_id: int) -> str:
+    """Собирает прямую ссылку на тариф MAX-бота."""
+    username = normalize_bot_username(bot_username)
+    if not username:
+        raise ValueError("MAX_BOT_USERNAME is empty")
+    if isinstance(tariff_id, bool) or not isinstance(tariff_id, int) or tariff_id <= 0:
+        raise ValueError("tariff_id must be a positive integer")
+    return f"https://max.ru/{username}?start=tariff_{tariff_id}"
+
+
 def build_prodamus_webhook_url(base_url: str, path: str = "/prodamus/webhook") -> str:
     """Собирает URL webhook Prodamus без дублирования path."""
     base = (base_url or "").strip().rstrip("/")
