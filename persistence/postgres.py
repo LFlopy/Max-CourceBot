@@ -541,6 +541,12 @@ async def upsert_user(user_id: int, first_name: str = "",
 
 async def get_user(user_id: int) -> dict | None:
     """Read data from PostgreSQL."""
+    try:
+        user_id = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    if user_id <= 0:
+        return None
     async with pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
         return dict(row) if row else None

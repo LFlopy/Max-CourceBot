@@ -275,7 +275,7 @@ async def handle_prodamus_webhook(request: web.Request) -> web.Response:
                 or request.headers.get("x-signature")
                 or ""
             )
-            if not payments.ProdamusProvider.verify_signature(body, method["secret_key"], signature):
+            if not payments.ProdamusProvider.verify_signature(data, method["secret_key"], signature):
                 print(f"  [webhook] Неверная подпись для order_id={matched_id}")
                 return web.Response(status=403, text="Invalid signature")
 

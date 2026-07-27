@@ -1,8 +1,10 @@
 
 import hmac
 import hashlib
+import json
 import uuid
 import logging
+from collections.abc import Mapping
 import aiohttp
 
 logger = logging.getLogger(__name__)
@@ -195,7 +197,7 @@ class ProdamusProvider(PaymentProvider):
             for k, v in metadata.items():
                 params[f"meta_{k}"] = str(v)
         if self.secret_key:
-            params["token"] = self.secret_key
+            params["signature"] = self.create_signature(params, self.secret_key)
 
         url = self.payform_url.rstrip("/")
         try:
@@ -214,12 +216,74 @@ class ProdamusProvider(PaymentProvider):
         return "pending"
 
     @staticmethod
-    def verify_signature(body: bytes, secret_key: str, signature: str) -> bool:
-        """Проверяет подпись webhook от Prodamus (HMAC-SHA256)."""
-        expected = hmac.new(
-            secret_key.encode(), body, hashlib.sha256
-        ).hexdigest()
-        return hmac.compare_digest(expected, signature)
+    def _stringify_values(value):
+        if isinstance(value, Mapping):
+            return {str(k): ProdamusProvider._stringify_values(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [ProdamusProvider._stringify_values(v) for v in value]
+        return "" if value is None else str(value)
+
+    @staticmethod
+    def _sort_recursive(value):
+        if isinstance(value, Mapping):
+            if value and all(str(key).isdigit() for key in value.keys()):
+                ordered_keys = sorted(value.keys(), key=lambda key: int(str(key)))
+                if ordered_keys == [str(i) for i in range(len(ordered_keys))]:
+                    return [
+                        ProdamusProvider._sort_recursive(value[key])
+                        for key in ordered_keys
+                    ]
+            return {
+                key: ProdamusProvider._sort_recursive(value[key])
+                for key in sorted(value.keys())
+            }
+        if isinstance(value, list):
+            return [ProdamusProvider._sort_recursive(v) for v in value]
+        return value
+
+    @staticmethod
+    def _insert_bracket_value(target: dict, key: str, value: str) -> None:
+        if "[" not in key:
+            target[key] = value
+            return
+
+        head, rest = key.split("[", 1)
+        parts = [head]
+        for part in rest.split("["):
+            parts.append(part.rstrip("]"))
+
+        current = target
+        for part in parts[:-1]:
+            current = current.setdefault(part, {})
+        current[parts[-1]] = value
+
+    @staticmethod
+    def _prepare_signature_data(data: Mapping) -> dict:
+        prepared: dict = {}
+        items = data.items()
+        for key, value in items:
+            if str(key).lower() in ("sign", "signature"):
+                continue
+            ProdamusProvider._insert_bracket_value(prepared, str(key), value)
+        return ProdamusProvider._sort_recursive(
+            ProdamusProvider._stringify_values(prepared)
+        )
+
+    @staticmethod
+    def create_signature(data: Mapping, secret_key: str) -> str:
+        """Создаёт подпись Prodamus: sorted POST -> JSON -> escaped slashes -> HMAC-SHA256."""
+        prepared = ProdamusProvider._prepare_signature_data(data)
+        payload = json.dumps(prepared, ensure_ascii=True, separators=(",", ":"))
+        payload = payload.replace("/", "\\/")
+        return hmac.new(secret_key.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+    @staticmethod
+    def verify_signature(data: Mapping, secret_key: str, signature: str) -> bool:
+        """Проверяет подпись webhook от Prodamus по алгоритму Hmac.php."""
+        if not signature:
+            return False
+        expected = ProdamusProvider.create_signature(data, secret_key)
+        return hmac.compare_digest(expected, signature.strip().lower())
 
 
 class AlfaBankProvider(PaymentProvider):

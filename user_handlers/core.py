@@ -945,7 +945,13 @@ async def handle_message(bot: MaxBot, update: dict):
     text = body.get("text", "").strip()
     sender = msg.get("sender", {})
     recipient = msg.get("recipient", {})
-    user_id = int(sender.get("user_id", 0))
+    try:
+        user_id = int(sender.get("user_id") or 0)
+    except (TypeError, ValueError):
+        user_id = 0
+    if user_id <= 0:
+        print("  [message] skipped: missing sender user_id")
+        return
     chat_id = int(recipient.get("chat_id") or user_id)
 
     btn = await db.get_button_texts(user_id=user_id)
