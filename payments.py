@@ -271,9 +271,9 @@ class ProdamusProvider(PaymentProvider):
 
     @staticmethod
     def create_signature(data: Mapping, secret_key: str) -> str:
-        """Создаёт подпись Prodamus: sorted POST -> JSON -> escaped slashes -> HMAC-SHA256."""
+        """Создаёт подпись Prodamus: sorted data -> JSON_UNESCAPED_UNICODE -> escaped slashes -> HMAC-SHA256."""
         prepared = ProdamusProvider._prepare_signature_data(data)
-        payload = json.dumps(prepared, ensure_ascii=True, separators=(",", ":"))
+        payload = json.dumps(prepared, ensure_ascii=False, separators=(",", ":"))
         payload = payload.replace("/", "\\/")
         return hmac.new(secret_key.encode(), payload.encode(), hashlib.sha256).hexdigest()
 

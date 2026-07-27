@@ -17,7 +17,7 @@ class ProdamusSignatureTests(unittest.TestCase):
         data = {
             "status": "success",
             "products[0][price]": "100.00",
-            "products[0][name]": "Course / Basic",
+            "products[0][name]": "Курс / Basic",
             "order_id": "abc-123",
             "sign": "received-signature",
         }
@@ -26,13 +26,13 @@ class ProdamusSignatureTests(unittest.TestCase):
             ProdamusProvider._prepare_signature_data(data),
             {
                 "order_id": "abc-123",
-                "products": [{"name": "Course / Basic", "price": "100.00"}],
+                "products": [{"name": "Курс / Basic", "price": "100.00"}],
                 "status": "success",
             },
         )
         self.assertEqual(
             ProdamusProvider.create_signature(data, "secret"),
-            "032eef2d56743a158409cffa4e1e27f3fd6b5f2b4346be293c1cf73d32fb16f2",
+            "616b079b1f63b5d4af2a0943db75146ccbfc45d6e3c341f0934be344956e670b",
         )
 
     def test_verify_signature_allows_header_value_case_and_spaces(self):
