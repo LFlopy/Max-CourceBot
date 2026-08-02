@@ -6,7 +6,7 @@ import config as cfg
 import database as db
 import payments
 from handlers import _activate_purchase
-from utils import parse_duration_to_minutes
+from utils import build_inline_keyboard, parse_duration_to_minutes
 
 
 EXPIRY_CHECK_INTERVAL = getattr(cfg, "EXPIRY_CHECK_INTERVAL", 60)
@@ -163,12 +163,14 @@ async def check_warmup_messages(bot: MaxBot):
 
                 sent = False
                 try:
+                    warmup_buttons = send.get("buttons") or []
+                    warmup_keyboard = build_inline_keyboard(warmup_buttons) if warmup_buttons else None
                     if send["media_url"]:
                         await bot.forward_attachment(
-                            user_id, "image", send["media_url"], text=send["message_text"],
+                            user_id, "image", send["media_url"], text=send["message_text"], keyboard=warmup_keyboard,
                         )
                     else:
-                        await bot.send_message(user_id, send["message_text"])
+                        await bot.send_message(user_id, send["message_text"], keyboard=warmup_keyboard)
                     sent = True
                     print(f"  [warmup] ✅ Отправлено purchase=#{purchase_id} user={user_id}")
                 except Exception as e:
@@ -181,4 +183,3 @@ async def check_warmup_messages(bot: MaxBot):
             print(f"  [warmup] Ошибка: {e}")
 
         await asyncio.sleep(WARMUP_CHECK_INTERVAL)
-

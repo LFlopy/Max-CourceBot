@@ -1,4 +1,5 @@
 
+import json
 import random
 
 import asyncpg
@@ -52,6 +53,7 @@ WARMUP_MESSAGE_UPDATE_FIELDS = {
     "tariff_id",
     "text",
     "media_url",
+    "buttons",
     "delay_minutes",
     "position",
     "is_active",
@@ -247,11 +249,14 @@ async def _create_tables():
                 tariff_id     INTEGER NOT NULL REFERENCES tariffs(id) ON DELETE CASCADE,
                 text          TEXT    NOT NULL DEFAULT '',
                 media_url     TEXT,
+                buttons       JSONB   NOT NULL DEFAULT '[]'::jsonb,
                 delay_minutes INTEGER NOT NULL DEFAULT 0,
                 position      INTEGER DEFAULT 0,
                 is_active     BOOLEAN DEFAULT TRUE,
                 created_at    TIMESTAMP DEFAULT NOW()
             );
+            ALTER TABLE tariff_warmup_messages
+                ADD COLUMN IF NOT EXISTS buttons JSONB NOT NULL DEFAULT '[]'::jsonb;
 
             CREATE TABLE IF NOT EXISTS warmup_plan (
                 id            SERIAL PRIMARY KEY,
@@ -1618,9 +1623,29 @@ async def get_bot_text(key: str, user_id: int | None = None, **context) -> str:
 
 
 
+def _normalize_buttons(value) -> list[dict]:
+    if not value:
+        return []
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(value, list):
+        return []
+    return [btn for btn in value if isinstance(btn, dict)]
+
+
+def _normalize_warmup_message_row(row) -> dict:
+    item = dict(row)
+    item["buttons"] = _normalize_buttons(item.get("buttons"))
+    return item
+
+
 async def create_warmup_message(tariff_id: int, text: str,
                                 media_url: str | None,
-                                delay_minutes: int) -> dict:
+                                delay_minutes: int,
+                                buttons: list[dict] | None = None) -> dict:
     """Создаёт догревающее сообщение тарифа (position = max+1)."""
     async with pool.acquire() as conn:
         max_pos = await conn.fetchval(
@@ -1628,10 +1653,10 @@ async def create_warmup_message(tariff_id: int, text: str,
             tariff_id,
         )
         row = await conn.fetchrow("""
-            INSERT INTO tariff_warmup_messages (tariff_id, text, media_url, delay_minutes, position)
-            VALUES ($1, $2, $3, $4, $5) RETURNING *
-        """, tariff_id, text, media_url or "", delay_minutes, max_pos + 1)
-        return dict(row)
+            INSERT INTO tariff_warmup_messages (tariff_id, text, media_url, buttons, delay_minutes, position)
+            VALUES ($1, $2, $3, $4::jsonb, $5, $6) RETURNING *
+        """, tariff_id, text, media_url or "", json.dumps(buttons or []), delay_minutes, max_pos + 1)
+        return _normalize_warmup_message_row(row)
 
 
 async def get_warmup_messages(tariff_id: int) -> list[dict]:
@@ -1641,7 +1666,7 @@ async def get_warmup_messages(tariff_id: int) -> list[dict]:
             "SELECT * FROM tariff_warmup_messages WHERE tariff_id = $1 ORDER BY position, id",
             tariff_id,
         )
-        return [dict(r) for r in rows]
+        return [_normalize_warmup_message_row(r) for r in rows]
 
 
 async def get_warmup_message(message_id: int) -> dict | None:
@@ -1650,7 +1675,7 @@ async def get_warmup_message(message_id: int) -> dict | None:
         row = await conn.fetchrow(
             "SELECT * FROM tariff_warmup_messages WHERE id = $1", message_id
         )
-        return dict(row) if row else None
+        return _normalize_warmup_message_row(row) if row else None
 
 
 async def update_warmup_message(message_id: int, **fields) -> dict | None:
@@ -1663,12 +1688,16 @@ async def update_warmup_message(message_id: int, **fields) -> dict | None:
     sets = []
     vals = []
     for i, (k, v) in enumerate(fields.items(), start=2):
-        sets.append(f"{k} = ${i}")
+        if k == "buttons":
+            sets.append(f"{k} = ${i}::jsonb")
+            v = json.dumps(v or [])
+        else:
+            sets.append(f"{k} = ${i}")
         vals.append(v)
     sql = f"UPDATE tariff_warmup_messages SET {', '.join(sets)} WHERE id = $1 RETURNING *"
     async with pool.acquire() as conn:
         row = await conn.fetchrow(sql, message_id, *vals)
-        return dict(row) if row else None
+        return _normalize_warmup_message_row(row) if row else None
 
 
 async def delete_warmup_message(message_id: int):
@@ -1781,7 +1810,8 @@ async def get_due_warmup_sends() -> list[dict]:
                 p.user_id,
                 wp.message_id,
                 twm.text AS message_text,
-                twm.media_url
+                twm.media_url,
+                twm.buttons
             FROM purchases p
             JOIN warmup_plan wp ON wp.purchase_id = p.id
             JOIN tariff_warmup_messages twm ON twm.id = wp.message_id
@@ -1796,7 +1826,7 @@ async def get_due_warmup_sends() -> list[dict]:
                   >= COALESCE(wp.delay_minutes, twm.delay_minutes)
             ORDER BY p.purchased_at, wp.slot_position
         """)
-        return [dict(r) for r in rows]
+        return [_normalize_warmup_message_row(r) for r in rows]
 
 
 async def mark_warmup_sent(purchase_id: int, message_id: int):

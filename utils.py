@@ -64,6 +64,58 @@ def build_tariff_deep_link(bot_username: str, tariff_id: int) -> str:
     return f"https://max.ru/{username}?start=tariff_{tariff_id}"
 
 
+def parse_inline_button_lines(text: str) -> tuple[list[dict], str | None]:
+    """Парсит кнопки формата: Текст кнопки - URL."""
+    buttons: list[dict] = []
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = re.match(r"^(?P<label>.+?)\s*[-–—]{1,2}\s*(?P<url>\S+)\s*$", line)
+        if not match:
+            return [], line
+        label = match.group("label").strip()
+        url = match.group("url").strip()
+        if not label or not url:
+            return [], line
+        buttons.append({"kind": "link", "text": label, "url": url})
+    return buttons, None
+
+
+def format_inline_buttons_message(buttons: list[dict], title: str = "✅ Кнопки рассылки:") -> str:
+    lines = [f"{title}\n"]
+    for i, btn in enumerate(buttons, 1):
+        if btn.get("kind") == "tariff" or btn.get("tariff_id"):
+            lines.append(f"{i}. 💰 **{btn['text']}**")
+        else:
+            lines.append(f"{i}. 🔗 **{btn['text']}** → {btn['url']}")
+    if len(buttons) < 5:
+        lines.append("\nМожно добавить ещё тариф или ссылку.")
+    return "\n".join(lines)
+
+
+def build_inline_keyboard(buttons: list[dict]) -> dict:
+    kb_buttons = []
+    for btn in buttons:
+        if btn.get("kind") == "tariff" or btn.get("tariff_id"):
+            kb_buttons.append([{
+                "type": "callback",
+                "text": btn["text"],
+                "payload": f"pay:{btn['tariff_id']}",
+            }])
+        else:
+            kb_buttons.append([{
+                "type": "link",
+                "text": btn["text"],
+                "url": btn["url"],
+            }])
+
+    return {
+        "type": "inline_keyboard",
+        "payload": {"buttons": kb_buttons},
+    }
+
+
 def build_prodamus_webhook_url(base_url: str, path: str = "/prodamus/webhook") -> str:
     """Собирает URL webhook Prodamus без дублирования path."""
     base = (base_url or "").strip().rstrip("/")

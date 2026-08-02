@@ -2,7 +2,6 @@
 import os
 import tempfile
 from datetime import datetime
-import re
 from max_client import MaxBot
 import config as cfg
 from config import ADMIN_IDS
@@ -11,10 +10,13 @@ import admin_keyboards as akb
 
 from fsm import set_state, get_state, clear_state, user_states
 from utils import (
+    build_inline_keyboard,
     build_tariff_deep_link,
     build_user_name,
     build_user_template_context,
+    format_inline_buttons_message,
     format_template,
+    parse_inline_button_lines,
     parse_duration_to_minutes,
     user_link,
 )
@@ -806,9 +808,193 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         await reply(
             f"Текст: {msg['text']}\n\n"
             f"Медиа: {'есть' if msg['media_url'] else 'нет'}\n"
+            f"Кнопки: {len(msg.get('buttons') or [])}\n"
             f"Время отправки: через {delay_label} после начала оплаты\n"
             f"Статус: {'активно' if msg['is_active'] else 'отключено'}",
             keyboard=akb.admin_warmup_detail(mid, msg["tariff_id"], msg["is_active"]),
+        )
+
+    elif payload.startswith("adm:warmup_buttons_menu:"):
+        parts = payload.split(":")
+        mid, tid = int(parts[2]), int(parts[3])
+        msg = await db.get_warmup_message(mid)
+        buttons = msg.get("buttons") or []
+        if buttons:
+            await reply(
+                format_inline_buttons_message(buttons),
+                keyboard=akb.admin_warmup_button_list(mid, tid, buttons, len(buttons) < 5),
+            )
+        else:
+            await reply(
+                "➕ Добавить кнопки к догревающей рассылке?\n\n"
+                "Можно комбинировать тарифы и сторонние ссылки (до 5 кнопок).",
+                keyboard=akb.admin_warmup_button_list(mid, tid, buttons, True),
+            )
+
+    elif payload.startswith("adm:warmup_buttons_clear:"):
+        parts = payload.split(":")
+        mid, tid = int(parts[2]), int(parts[3])
+        await db.update_warmup_message(mid, buttons=[])
+        await reply(
+            "✅ Кнопки удалены.",
+            keyboard=akb.admin_warmup_back_to_detail(mid, tid),
+        )
+
+    elif payload.startswith("adm:warmup_add_btn:"):
+        parts = payload.split(":")
+        if len(parts) == 4:
+            mid, tid = int(parts[2]), int(parts[3])
+            msg = await db.get_warmup_message(mid)
+            set_state(user_id, "adm_warmup_wait_input_button",
+                      message_id=mid, tariff_id=tid, warmup_buttons=msg.get("buttons") or [])
+        else:
+            tid = int(parts[2])
+            sd = user_states.get(user_id, {})
+            set_state(user_id, "adm_warmup_add_wait_input_button",
+                      tariff_id=tid,
+                      warmup_text=sd.get("warmup_text"),
+                      warmup_delay_minutes=sd.get("warmup_delay_minutes"),
+                      warmup_buttons=sd.get("warmup_buttons", []))
+        await reply(
+            "📌 Отправьте кнопку в формате:\n"
+            "**Текст кнопки - https://ссылка.com**\n"
+            "Подойдут `-`, `--` и `—`.",
+            keyboard=akb.admin_warmup_cancel(tid),
+        )
+
+    elif payload.startswith("adm:warmup_add_btns:tariff:"):
+        parts = payload.split(":")
+        if len(parts) == 5:
+            mid, tid = int(parts[3]), int(parts[4])
+            msg = await db.get_warmup_message(mid)
+            buttons = msg.get("buttons") or []
+        else:
+            mid = None
+            tid = int(parts[3])
+            sd = user_states.get(user_id, {})
+            buttons = sd.get("warmup_buttons", [])
+        if len(buttons) >= 5:
+            await bot.answer_callback(callback_id, text="Максимум 5 кнопок ⚠️")
+            return True
+        added_tariff_ids = {
+            b["tariff_id"] for b in buttons
+            if b.get("kind") == "tariff" and b.get("tariff_id")
+        }
+        tariffs = await db.list_tariffs()
+        await reply(
+            "💰 Выберите тариф для кнопки в догревающей рассылке:",
+            keyboard=akb.admin_warmup_button_picker(mid, tid, tariffs, added_tariff_ids),
+        )
+
+    elif payload == "adm:warmup_add_btn_disabled":
+        await bot.answer_callback(callback_id, text="Максимум 5 кнопок достигнут ⚠️")
+
+    elif payload.startswith("adm:warmup_btn_tariff:"):
+        parts = payload.split(":")
+        mid, warmup_tid, button_tid = int(parts[2]), int(parts[3]), int(parts[4])
+        tariff = await db.get_tariff(button_tid)
+        if not tariff:
+            await bot.answer_callback(callback_id, text="Тариф не найден")
+            return True
+        if mid:
+            msg = await db.get_warmup_message(mid)
+            buttons = list(msg.get("buttons") or [])
+        else:
+            sd = user_states.get(user_id, {})
+            buttons = list(sd.get("warmup_buttons", []))
+        if len(buttons) >= 5:
+            await bot.answer_callback(callback_id, text="Максимум 5 кнопок ⚠️")
+            return True
+        if any(b.get("kind") == "tariff" and b.get("tariff_id") == button_tid for b in buttons):
+            await bot.answer_callback(callback_id, text="Этот тариф уже добавлен")
+            return True
+        buttons.append({"kind": "tariff", "text": tariff["name"], "tariff_id": button_tid})
+        if mid:
+            await db.update_warmup_message(mid, buttons=buttons)
+            await reply(
+                format_inline_buttons_message(buttons),
+                keyboard=akb.admin_warmup_button_list(mid, warmup_tid, buttons, len(buttons) < 5),
+            )
+        else:
+            sd = user_states.get(user_id, {})
+            set_state(user_id, "adm_warmup_add_buttons_added",
+                      tariff_id=warmup_tid,
+                      warmup_text=sd.get("warmup_text"),
+                      warmup_delay_minutes=sd.get("warmup_delay_minutes"),
+                      warmup_buttons=buttons)
+            await reply(
+                format_inline_buttons_message(buttons),
+                keyboard=akb.admin_warmup_button_list(None, warmup_tid, buttons, len(buttons) < 5),
+            )
+
+    elif payload.startswith("adm:warmup_add_buttons_menu:"):
+        tid = int(payload.split(":")[2])
+        sd = user_states.get(user_id, {})
+        buttons = sd.get("warmup_buttons", [])
+        if buttons:
+            await reply(
+                format_inline_buttons_message(buttons),
+                keyboard=akb.admin_warmup_button_list(None, tid, buttons, len(buttons) < 5),
+            )
+        else:
+            await reply(
+                "➕ Добавить кнопки к догревающей рассылке?\n\n"
+                "Можно комбинировать тарифы и сторонние ссылки (до 5 кнопок).",
+                keyboard=akb.admin_warmup_add_buttons(tid),
+            )
+
+    elif payload.startswith("adm:warmup_add_btns:yes:"):
+        tid = int(payload.split(":")[3])
+        sd = user_states.get(user_id, {})
+        set_state(user_id, "adm_warmup_add_wait_input_button",
+                  tariff_id=tid,
+                  warmup_text=sd.get("warmup_text"),
+                  warmup_delay_minutes=sd.get("warmup_delay_minutes"),
+                  warmup_buttons=sd.get("warmup_buttons", []))
+        await reply(
+            "📌 Отправьте кнопки в формате:\n"
+            "**Текст кнопки - https://ссылка.com**\n\n"
+            "Пример:\n"
+            "Статья 1 - https://example.com/article-1\n\n"
+            "Подойдут `-`, `--` и `—`.\n"
+            "Можно отправлять по одной кнопке или весь список сразу (разделяя строками)",
+            keyboard=akb.admin_warmup_cancel(tid),
+        )
+
+    elif payload.startswith("adm:warmup_add_btns:no:"):
+        tid = int(payload.split(":")[3])
+        sd = user_states.get(user_id, {})
+        await db.create_warmup_message(
+            tid,
+            text=sd.get("warmup_text", ""),
+            media_url=None,
+            delay_minutes=sd.get("warmup_delay_minutes", 0),
+            buttons=[],
+        )
+        clear_state(user_id)
+        tariff = await db.get_tariff(tid)
+        messages = await db.get_warmup_messages(tid)
+        await reply(
+            f"✅ Сообщение добавлено.\n\n🔥 Догревающие рассылки тарифа «{tariff['name']}»",
+            keyboard=akb.admin_warmup_list(tid, messages, tariff.get("warmup_order_mode") or "sequential"),
+        )
+
+    elif payload.startswith("adm:warmup_add_save:"):
+        tid = int(payload.split(":")[2])
+        sd = user_states.get(user_id, {})
+        await db.create_warmup_message(
+            tid,
+            text=sd.get("warmup_text", ""),
+            media_url=None,
+            delay_minutes=sd.get("warmup_delay_minutes", 0),
+            buttons=sd.get("warmup_buttons", []),
+        )
+        clear_state(user_id)
+        tariff = await db.get_tariff(tid)
+        messages = await db.get_warmup_messages(tid)
+        await reply(
+            f"✅ Сообщение добавлено.\n\n🔥 Догревающие рассылки тарифа «{tariff['name']}»",
+            keyboard=akb.admin_warmup_list(tid, messages, tariff.get("warmup_order_mode") or "sequential"),
         )
 
     elif payload.startswith("adm:warmup_edit_text:"):
@@ -2321,15 +2507,19 @@ async def handle_admin_message(
             await bot.send_message(chat_id, "Не удалось распознать. Введите например: 2ч или 30м")
             return True
         warmup_text = state_data.get("warmup_text", "")
-        await db.create_warmup_message(tid, text=warmup_text, media_url=None, delay_minutes=delay_minutes)
-        clear_state(user_id)
-        tariff = await db.get_tariff(tid)
-        messages = await db.get_warmup_messages(tid)
-        await bot.send_message(chat_id, "✅ Сообщение добавлено.")
+        set_state(user_id, "adm_warmup_add_buttons",
+                  tariff_id=tid,
+                  warmup_text=warmup_text,
+                  warmup_delay_minutes=delay_minutes,
+                  warmup_buttons=[])
         await bot.send_message(
             chat_id,
-            f"🔥 Догревающие рассылки тарифа «{tariff['name']}»",
-            keyboard=akb.admin_warmup_list(tid, messages, tariff.get("warmup_order_mode") or "sequential"),
+            "➕ Добавить кнопки к догревающей рассылке?\n\n"
+            "Можно комбинировать тарифы и сторонние ссылки (до 5 кнопок).\n"
+            "• **Сторонняя ссылка** — переход на URL\n"
+            "• **Кнопка тарифа** — оформление тарифа в боте\n"
+            "• **Без кнопки** — только текст/медиа",
+            keyboard=akb.admin_warmup_add_buttons(tid),
         )
         return True
 
@@ -2380,6 +2570,53 @@ async def handle_admin_message(
             chat_id,
             f"🔥 Догревающие рассылки тарифа «{tariff['name']}»",
             keyboard=akb.admin_warmup_list(tid, messages, tariff.get("warmup_order_mode") or "sequential"),
+        )
+        return True
+
+    if state in ("adm_warmup_wait_input_button", "adm_warmup_add_wait_input_button", "adm_warmup_add_buttons_added"):
+        parsed_buttons, invalid_line = _parse_broadcast_button_lines(text)
+        if invalid_line is not None or not parsed_buttons:
+            await bot.send_message(
+                chat_id,
+                "❌ Неверный формат! Используйте:\n"
+                "**Текст кнопки - URL**\n\n"
+                "Пример: Купить курс - https://example.com/buy\n"
+                "Можно отправлять по одной кнопке или списком, по одной строке на кнопку.",
+                keyboard=akb.admin_warmup_cancel(state_data.get("tariff_id")),
+            )
+            return True
+
+        buttons = list(state_data.get("warmup_buttons", []))
+        if len(buttons) + len(parsed_buttons) > 5:
+            await bot.send_message(
+                chat_id,
+                "❌ Максимум 5 кнопок в рассылке.",
+                keyboard=akb.admin_warmup_cancel(state_data.get("tariff_id")),
+            )
+            return True
+
+        buttons.extend(parsed_buttons)
+        tid = state_data.get("tariff_id")
+        mid = state_data.get("message_id")
+        if state == "adm_warmup_wait_input_button" and mid:
+            await db.update_warmup_message(mid, buttons=buttons)
+            clear_state(user_id)
+            await bot.send_message(
+                chat_id,
+                format_inline_buttons_message(buttons),
+                keyboard=akb.admin_warmup_button_list(mid, tid, buttons, len(buttons) < 5),
+            )
+            return True
+
+        set_state(user_id, "adm_warmup_add_buttons_added",
+                  tariff_id=tid,
+                  warmup_text=state_data.get("warmup_text"),
+                  warmup_delay_minutes=state_data.get("warmup_delay_minutes"),
+                  warmup_buttons=buttons)
+        await bot.send_message(
+            chat_id,
+            format_inline_buttons_message(buttons),
+            keyboard=akb.admin_warmup_button_list(None, tid, buttons, len(buttons) < 5),
         )
         return True
 
@@ -3109,54 +3346,15 @@ def _contact_request_kb() -> dict:
 
 
 def _parse_broadcast_button_lines(text: str) -> tuple[list[dict], str | None]:
-    buttons: list[dict] = []
-    for raw_line in (text or "").splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        match = re.match(r"^(?P<label>.+?)\s*[-–—]{1,2}\s*(?P<url>\S+)\s*$", line)
-        if not match:
-            return [], line
-        label = match.group("label").strip()
-        url = match.group("url").strip()
-        if not label or not url:
-            return [], line
-        buttons.append({"kind": "link", "text": label, "url": url})
-    return buttons, None
+    return parse_inline_button_lines(text)
 
 
 def _format_broadcast_buttons_message(buttons: list[dict]) -> str:
-    lines = ["✅ Кнопки рассылки:\n"]
-    for i, btn in enumerate(buttons, 1):
-        if btn.get("kind") == "tariff" or btn.get("tariff_id"):
-            lines.append(f"{i}. 💰 **{btn['text']}**")
-        else:
-            lines.append(f"{i}. 🔗 **{btn['text']}** → {btn['url']}")
-    if len(buttons) < 5:
-        lines.append("\nМожно добавить ещё тариф или ссылку.")
-    return "\n".join(lines)
+    return format_inline_buttons_message(buttons)
 
 
 def _build_broadcast_keyboard(buttons: list[dict]) -> dict:
-    kb_buttons = []
-    for btn in buttons:
-        if btn.get("kind") == "tariff" or btn.get("tariff_id"):
-            kb_buttons.append([{
-                "type": "callback",
-                "text": btn["text"],
-                "payload": f"pay:{btn['tariff_id']}",
-            }])
-        else:
-            kb_buttons.append([{
-                "type": "link",
-                "text": btn["text"],
-                "url": btn["url"],
-            }])
-
-    return {
-        "type": "inline_keyboard",
-        "payload": {"buttons": kb_buttons},
-    }
+    return build_inline_keyboard(buttons)
 
 
 async def _render_broadcast_text(text: str, user_id: int) -> str:

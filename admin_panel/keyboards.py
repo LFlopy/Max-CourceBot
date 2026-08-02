@@ -212,7 +212,6 @@ def admin_tariff_settings(tariff_id: int, is_active: bool) -> dict:
         [{"type": "callback", "text": "🎁 Бонусный файл", "payload": f"adm:tariff_gifts:{tariff_id}"}],
         [{"type": "callback", "text": "🔥 Догревающие рассылки", "payload": f"adm:warmup_list:{tariff_id}"}],
         [{"type": "callback", "text": "🔗 Ссылка на тариф", "payload": f"adm:tariff_link:{tariff_id}"}],
-        [{"type": "callback", "text": "🛒 Ссылка на покупку", "payload": f"adm:buy_link:{tariff_id}"}],
         [{"type": "callback", "text": "💾 Сохранить", "payload": f"adm:save_settings:{tariff_id}"}],
         [{"type": "callback", "text": hide_text, "payload": f"adm:toggle_active:{tariff_id}"}],
         [{"type": "callback", "text": "🗑 Удалить", "payload": f"adm:delete:{tariff_id}"}],
@@ -497,6 +496,27 @@ def admin_broadcast_button_picker(tariffs: list[dict], added_tariff_ids: set[int
     if not buttons:
         buttons.append([{"type": "callback", "text": "Все тарифы уже добавлены", "payload": "adm:bc_add_btn_disabled"}])
     buttons.append([{"type": "callback", "text": "🔙 Назад", "payload": "adm:bc_buttons_menu"}])
+    return _kb(buttons)
+
+
+def admin_warmup_button_picker(message_id: int | None,
+                               tariff_id: int,
+                               tariffs: list[dict],
+                               added_tariff_ids: set[int] | None = None) -> dict:
+    """Выбор тарифа для кнопки в догревающем сообщении."""
+    added = added_tariff_ids or set()
+    buttons = []
+    for t in tariffs:
+        if t.get("is_active") and t["id"] not in added:
+            buttons.append([{
+                "type": "callback",
+                "text": t["name"],
+                "payload": f"adm:warmup_btn_tariff:{message_id or 0}:{tariff_id}:{t['id']}",
+            }])
+    if not buttons:
+        buttons.append([{"type": "callback", "text": "Все тарифы уже добавлены", "payload": "adm:warmup_add_btn_disabled"}])
+    back_payload = f"adm:warmup_buttons_menu:{message_id}:{tariff_id}" if message_id else f"adm:warmup_add_buttons_menu:{tariff_id}"
+    buttons.append([{"type": "callback", "text": "🔙 Назад", "payload": back_payload}])
     return _kb(buttons)
 
 
@@ -812,6 +832,7 @@ def admin_warmup_detail(message_id: int, tariff_id: int, is_active: bool) -> dic
     return _kb([
         [{"type": "callback", "text": "✏️ Изменить текст", "payload": f"adm:warmup_edit_text:{message_id}"}],
         [{"type": "callback", "text": "🖼 Изменить медиа", "payload": f"adm:warmup_edit_media:{message_id}"}],
+        [{"type": "callback", "text": "🔘 Кнопки", "payload": f"adm:warmup_buttons_menu:{message_id}:{tariff_id}"}],
         [{"type": "callback", "text": "⏱ Изменить время отправки", "payload": f"adm:warmup_edit_delay:{message_id}"}],
         [{"type": "callback", "text": "🔼 Переместить вверх", "payload": f"adm:warmup_up:{message_id}:{tariff_id}"}],
         [{"type": "callback", "text": "🔽 Переместить вниз", "payload": f"adm:warmup_down:{message_id}:{tariff_id}"}],
@@ -833,3 +854,33 @@ def admin_warmup_back_to_detail(message_id: int, tariff_id: int) -> dict:
     return _kb([
         [{"type": "callback", "text": "🔙 Назад", "payload": f"adm:warmup_open:{message_id}"}],
     ])
+
+
+def admin_warmup_add_buttons(tariff_id: int) -> dict:
+    return _kb([
+        [{"type": "callback", "text": "🔗 Добавить ссылку", "payload": f"adm:warmup_add_btns:yes:{tariff_id}"}],
+        [{"type": "callback", "text": "💰 Добавить тариф", "payload": f"adm:warmup_add_btns:tariff:{tariff_id}"}],
+        [{"type": "callback", "text": "➡️ Без кнопок", "payload": f"adm:warmup_add_btns:no:{tariff_id}"}],
+        [{"type": "callback", "text": "❌ Отмена", "payload": f"adm:warmup_list:{tariff_id}"}],
+    ])
+
+
+def admin_warmup_button_list(message_id: int | None,
+                             tariff_id: int,
+                             buttons: list[dict],
+                             can_add_more: bool) -> dict:
+    rows = []
+    if can_add_more:
+        if message_id:
+            rows.append([{"type": "callback", "text": "🔗 Добавить ссылку", "payload": f"adm:warmup_add_btn:{message_id}:{tariff_id}"}])
+            rows.append([{"type": "callback", "text": "💰 Добавить тариф", "payload": f"adm:warmup_add_btns:tariff:{message_id}:{tariff_id}"}])
+        else:
+            rows.append([{"type": "callback", "text": "🔗 Добавить ссылку", "payload": f"adm:warmup_add_btn:{tariff_id}"}])
+            rows.append([{"type": "callback", "text": "💰 Добавить тариф", "payload": f"adm:warmup_add_btns:tariff:{tariff_id}"}])
+    if message_id:
+        rows.append([{"type": "callback", "text": "🗑 Очистить кнопки", "payload": f"adm:warmup_buttons_clear:{message_id}:{tariff_id}"}])
+        rows.append([{"type": "callback", "text": "🔙 Назад", "payload": f"adm:warmup_open:{message_id}"}])
+    else:
+        rows.append([{"type": "callback", "text": "✅ Сохранить сообщение", "payload": f"adm:warmup_add_save:{tariff_id}"}])
+        rows.append([{"type": "callback", "text": "❌ Отмена", "payload": f"adm:warmup_list:{tariff_id}"}])
+    return _kb(rows)
