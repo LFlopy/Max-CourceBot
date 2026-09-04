@@ -365,7 +365,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
             tariff = await db.get_tariff(tid)
             await reply(
                 f"✅ Ресурсы тарифа «{tariff['name']}» обновлены ({len(resources)} шт.)",
-                keyboard=akb.admin_tariff_settings(tid, tariff["is_active"]),
+                keyboard=akb.admin_tariff_settings(tid, tariff["is_active"], tariff.get("allow_repeat", False)),
             )
         else:
             name = state_data.get("tariff_name", "")
@@ -412,7 +412,7 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         tariff = await db.get_tariff(tid)
         await reply(
             f"Настройки тарифа «{tariff['name']}» сохранены ✅",
-            keyboard=akb.admin_tariff_settings(tid, tariff["is_active"]),
+            keyboard=akb.admin_tariff_settings(tid, tariff["is_active"], tariff.get("allow_repeat", False)),
         )
 
     elif payload.startswith("adm:toggle_active:"):
@@ -420,6 +420,16 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
         tariff = await db.get_tariff(tid)
         new_active = not tariff["is_active"]
         await db.update_tariff(tid, is_active=new_active)
+        tariff = await db.get_tariff(tid)
+        await _show_tariff_settings(reply, tariff)
+
+    elif payload.startswith("adm:toggle_repeat:"):
+        tid = int(payload.split(":")[2])
+        tariff = await db.get_tariff(tid)
+        if not tariff:
+            await reply("Тариф не найден")
+            return True
+        await db.update_tariff(tid, allow_repeat=not tariff.get("allow_repeat", False))
         tariff = await db.get_tariff(tid)
         await _show_tariff_settings(reply, tariff)
 
@@ -3057,7 +3067,9 @@ async def _show_tariff_settings(reply_fn, tariff: dict):
     await reply_fn(
         f"Настройка тарифа «{tariff['name']}»\n"
         f"Описание тарифа:\n{desc}",
-        keyboard=akb.admin_tariff_settings(tariff["id"], tariff["is_active"]),
+        keyboard=akb.admin_tariff_settings(
+            tariff["id"], tariff["is_active"], tariff.get("allow_repeat", False)
+        ),
     )
 
 
@@ -3069,7 +3081,9 @@ async def _send_tariff_settings(bot: MaxBot, chat_id: int, tariff: dict):
         chat_id,
         f"Настройка тарифа «{tariff['name']}»\n"
         f"Описание тарифа:\n{desc}",
-        keyboard=akb.admin_tariff_settings(tariff["id"], tariff["is_active"]),
+        keyboard=akb.admin_tariff_settings(
+            tariff["id"], tariff["is_active"], tariff.get("allow_repeat", False)
+        ),
     )
 
 

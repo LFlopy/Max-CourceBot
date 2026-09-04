@@ -110,7 +110,10 @@ async def _get_visible_tariffs_for_user(user_id: int) -> list[dict]:
     active_tariff_ids = await db.get_active_tariff_ids(user_id)
     unlocked_tariff_ids = await db.get_unlocked_tariff_ids(user_id)
     visible = db.filter_tariffs_by_allowed_group(active_tariffs, unlocked_tariff_ids)
-    return [t for t in visible if t["id"] not in active_tariff_ids]
+    return [
+        t for t in visible
+        if t["id"] not in active_tariff_ids or t.get("allow_repeat", False)
+    ]
 
 
 async def _user_can_view_tariff(user_id: int, tariff: dict) -> bool:
@@ -204,7 +207,7 @@ async def show_tariff_details(
         return True
 
     user_tariff_ids = await db.get_active_tariff_ids(user_id)
-    if tariff_id in user_tariff_ids:
+    if tariff_id in user_tariff_ids and not tariff.get("allow_repeat", False):
         await _send(
             "✅ У вас уже есть активная подписка на этот тариф.",
             kb.main_menu(user_id, btn=btn),
@@ -638,7 +641,7 @@ async def handle_callback(bot: MaxBot, update: dict):
             await reply("❌ Этот тариф вам недоступен.", keyboard=kb.main_menu(user_id, btn=btn))
             return
         user_tariff_ids = await db.get_active_tariff_ids(user_id)
-        if tariff_id in user_tariff_ids:
+        if tariff_id in user_tariff_ids and not tariff.get("allow_repeat", False):
             await reply("✅ У вас уже есть активная подписка на этот тариф.", keyboard=kb.main_menu(user_id, btn=btn))
             return
         price = await _calc_price(user_id, tariff)
@@ -839,7 +842,7 @@ async def handle_callback(bot: MaxBot, update: dict):
             await reply("❌ Этот тариф вам недоступен.", keyboard=kb.main_menu(user_id, btn=btn))
             return
         user_tariff_ids = await db.get_active_tariff_ids(user_id)
-        if tariff_id in user_tariff_ids:
+        if tariff_id in user_tariff_ids and not tariff.get("allow_repeat", False):
             await reply("✅ У вас уже есть активная подписка на этот тариф.", keyboard=kb.main_menu(user_id, btn=btn))
             return
 

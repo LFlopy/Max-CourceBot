@@ -194,9 +194,10 @@ def admin_tariff_created(tariff_id: int) -> dict:
 
 
 
-def admin_tariff_settings(tariff_id: int, is_active: bool) -> dict:
+def admin_tariff_settings(tariff_id: int, is_active: bool, allow_repeat: bool = False) -> dict:
     """Return an admin inline keyboard."""
     hide_text = "👁 Показать тариф" if not is_active else "🙈 Скрыть тариф"
+    repeat_text = "🔁 Повторное получение: да" if allow_repeat else "🔁 Повторное получение: нет"
     return _kb([
         [{"type": "callback", "text": "🖼 Добавить медиа тарифа", "payload": f"adm:set_media:{tariff_id}"}],
         [{"type": "callback", "text": "✏️ Название", "payload": f"adm:set_name:{tariff_id}"}],
@@ -214,6 +215,7 @@ def admin_tariff_settings(tariff_id: int, is_active: bool) -> dict:
         [{"type": "callback", "text": "🔗 Ссылка на тариф", "payload": f"adm:tariff_link:{tariff_id}"}],
         [{"type": "callback", "text": "💾 Сохранить", "payload": f"adm:save_settings:{tariff_id}"}],
         [{"type": "callback", "text": hide_text, "payload": f"adm:toggle_active:{tariff_id}"}],
+        [{"type": "callback", "text": repeat_text, "payload": f"adm:toggle_repeat:{tariff_id}"}],
         [{"type": "callback", "text": "🗑 Удалить", "payload": f"adm:delete:{tariff_id}"}],
         [{"type": "callback", "text": "🔙 Назад", "payload": "adm:tariffs"}],
     ])

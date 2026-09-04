@@ -19,6 +19,7 @@ TARIFF_UPDATE_FIELDS = {
     "duration_text",
     "is_free",
     "is_active",
+    "allow_repeat",
     "description",
     "media_url",
     "category_id",
@@ -103,6 +104,7 @@ async def _create_tables():
                 duration_text           VARCHAR(100),
                 is_free                 BOOLEAN DEFAULT FALSE,
                 is_active               BOOLEAN DEFAULT TRUE,
+                allow_repeat            BOOLEAN DEFAULT FALSE,
                 description             TEXT DEFAULT '',
                 media_url               TEXT,
                 category_id             INTEGER REFERENCES categories(id) ON DELETE SET NULL,
@@ -213,6 +215,7 @@ async def _create_tables():
 
             -- миграции tariffs
             ALTER TABLE tariffs ADD COLUMN IF NOT EXISTS duration_minutes INTEGER;
+            ALTER TABLE tariffs ADD COLUMN IF NOT EXISTS allow_repeat BOOLEAN DEFAULT FALSE;
 
             -- миграция типов курсов:
             -- Тип 1 (марафон, end_date): сбрасываем duration, чтобы поля не конфликтовали
