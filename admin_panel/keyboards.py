@@ -591,6 +591,50 @@ def admin_cancel_feedback_reply() -> dict:
     ])
 
 
+def admin_feedback_add_buttons() -> dict:
+    """Выбор кнопок для ответа на сообщение обратной связи."""
+    return _kb([
+        [{"type": "callback", "text": "🔗 Сторонняя ссылка", "payload": "adm:fb_add_btns:yes"}],
+        [{"type": "callback", "text": "💰 Кнопка тарифа", "payload": "adm:fb_add_btns:tariff"}],
+        [{"type": "callback", "text": "📨 Без кнопки", "payload": "adm:fb_add_btns:no"}],
+        [{"type": "callback", "text": "❌ Отмена", "payload": "adm:cancel_feedback_reply"}],
+    ])
+
+
+def admin_feedback_button_list(buttons_data: list[dict], can_add_more: bool = True) -> dict:
+    """Управление кнопками, добавленными к ответу обратной связи."""
+    buttons = []
+    if can_add_more:
+        buttons.append([{"type": "callback", "text": "➕ Сторонняя ссылка", "payload": "adm:fb_add_btn"}])
+        buttons.append([{"type": "callback", "text": "➕ Кнопка тарифа", "payload": "adm:fb_add_btns:tariff"}])
+    else:
+        buttons.append([{"type": "callback", "text": "➕ Максимум 5 кнопок", "payload": "adm:fb_add_btn_disabled"}])
+    buttons.append([{"type": "callback", "text": "✅ Отправить ответ", "payload": "adm:fb_send_with_btns"}])
+    buttons.append([{"type": "callback", "text": "❌ Отмена", "payload": "adm:cancel_feedback_reply"}])
+    return _kb(buttons)
+
+
+def admin_feedback_button_picker(tariffs: list[dict], added_tariff_ids: set[int] | None = None) -> dict:
+    """Выбор тарифа для кнопки в ответе обратной связи."""
+    added = added_tariff_ids or set()
+    buttons = []
+    for tariff in tariffs:
+        if tariff.get("is_active") and tariff["id"] not in added:
+            buttons.append([{
+                "type": "callback",
+                "text": tariff["name"],
+                "payload": f"adm:fb_btn_tariff:{tariff['id']}",
+            }])
+    if not buttons:
+        buttons.append([{
+            "type": "callback",
+            "text": "Все тарифы уже добавлены",
+            "payload": "adm:fb_add_btn_disabled",
+        }])
+    buttons.append([{"type": "callback", "text": "🔙 Назад", "payload": "adm:fb_buttons_menu"}])
+    return _kb(buttons)
+
+
 
 def admin_bot_texts_list(labels: dict) -> dict:
     """labels = {key: label_name}"""

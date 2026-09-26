@@ -1744,6 +1744,123 @@ async def handle_admin_callback(bot: MaxBot, update: dict) -> bool:
             keyboard=akb.admin_cancel_feedback_reply(),
         )
 
+    elif payload == "adm:fb_add_btns:yes" or payload == "adm:fb_add_btn":
+        sd = user_states.get(user_id, {})
+        set_state(
+            user_id,
+            "adm_feedback_wait_input_button",
+            target_user_id=sd.get("target_user_id"),
+            feedback_text=sd.get("feedback_text", ""),
+            feedback_media=sd.get("feedback_media", []),
+            feedback_buttons=sd.get("feedback_buttons", []),
+        )
+        await reply(
+            "📌 Отправьте кнопку в формате:\n"
+            "**Текст кнопки - https://ссылка.com**\n\n"
+            "Можно отправить одну кнопку или список, по одной строке на кнопку.\n"
+            "Подойдут `-`, `--` и `—`.",
+            keyboard=akb.admin_cancel_feedback_reply(),
+        )
+
+    elif payload == "adm:fb_add_btns:tariff":
+        sd = user_states.get(user_id, {})
+        buttons = sd.get("feedback_buttons", [])
+        if len(buttons) >= 5:
+            await bot.answer_callback(callback_id, text="Максимум 5 кнопок ⚠️")
+            return True
+        added_tariff_ids = {
+            button["tariff_id"] for button in buttons
+            if button.get("kind") == "tariff" and button.get("tariff_id")
+        }
+        tariffs = await db.list_tariffs()
+        await reply(
+            "💰 Выберите тариф для кнопки в ответе:",
+            keyboard=akb.admin_feedback_button_picker(tariffs, added_tariff_ids),
+        )
+
+    elif payload == "adm:fb_buttons_menu":
+        sd = user_states.get(user_id, {})
+        buttons = sd.get("feedback_buttons", [])
+        if buttons:
+            await reply(
+                format_inline_buttons_message(buttons, title="✅ Кнопки ответа:"),
+                keyboard=akb.admin_feedback_button_list(buttons, len(buttons) < 5),
+            )
+        else:
+            await reply(
+                "➕ Добавить кнопки к ответу?\n\n"
+                "Можно комбинировать тарифы и сторонние ссылки (до 5 кнопок).",
+                keyboard=akb.admin_feedback_add_buttons(),
+            )
+
+    elif payload == "adm:fb_add_btns:no":
+        sd = user_states.get(user_id, {})
+        target_id = sd.get("target_user_id")
+        await _send_feedback_reply(
+            bot,
+            target_id,
+            sd.get("feedback_text", ""),
+            sd.get("feedback_media", []),
+        )
+        set_state(target_id, "waiting_feedback")
+        clear_state(user_id)
+        await bot.send_message(
+            chat_id,
+            "✅ Ответ отправлен пользователю.",
+            keyboard=akb.admin_main(),
+        )
+
+    elif payload == "adm:fb_send_with_btns":
+        sd = user_states.get(user_id, {})
+        target_id = sd.get("target_user_id")
+        buttons = sd.get("feedback_buttons", [])
+        keyboard = build_inline_keyboard(buttons) if buttons else None
+        await _send_feedback_reply(
+            bot,
+            target_id,
+            sd.get("feedback_text", ""),
+            sd.get("feedback_media", []),
+            keyboard=keyboard,
+        )
+        set_state(target_id, "waiting_feedback")
+        clear_state(user_id)
+        await bot.send_message(
+            chat_id,
+            "✅ Ответ с кнопками отправлен пользователю.",
+            keyboard=akb.admin_main(),
+        )
+
+    elif payload.startswith("adm:fb_btn_tariff:"):
+        tid = int(payload.split(":")[2])
+        sd = user_states.get(user_id, {})
+        tariff = await db.get_tariff(tid)
+        if not tariff:
+            await bot.answer_callback(callback_id, text="Тариф не найден")
+            return True
+        buttons = list(sd.get("feedback_buttons", []))
+        if len(buttons) >= 5:
+            await bot.answer_callback(callback_id, text="Максимум 5 кнопок ⚠️")
+            return True
+        if any(button.get("kind") == "tariff" and button.get("tariff_id") == tid for button in buttons):
+            await bot.answer_callback(callback_id, text="Этот тариф уже добавлен")
+            return True
+        buttons.append({"kind": "tariff", "text": tariff["name"], "tariff_id": tid})
+        set_state(
+            user_id,
+            "adm_feedback_buttons_added",
+            target_user_id=sd.get("target_user_id"),
+            feedback_text=sd.get("feedback_text", ""),
+            feedback_media=sd.get("feedback_media", []),
+            feedback_buttons=buttons,
+        )
+        await reply(
+            format_inline_buttons_message(buttons, title="✅ Кнопки ответа:"),
+            keyboard=akb.admin_feedback_button_list(buttons, len(buttons) < 5),
+        )
+
+    elif payload == "adm:fb_add_btn_disabled":
+        await bot.answer_callback(callback_id, text="Максимум 5 кнопок достигнут ⚠️")
+
     elif payload == "adm:cancel_feedback_reply":
         clear_state(user_id)
         await bot.send_message(chat_id, "Ответ отменён.")
@@ -2753,27 +2870,63 @@ async def handle_admin_message(
         return True
 
     if state == "adm_reply_feedback":
-        target_id = state_data.get("target_user_id")
         media_atts = [
-            att for att in (attachments or [])
+            {"type": att.get("type"), "token": att.get("payload", {}).get("token")}
+            for att in (attachments or [])
             if att.get("type") in ("image", "file", "video", "audio")
                and att.get("payload", {}).get("token")
         ]
-        if text:
-            await bot.send_message(
-                target_id,
-                await db.get_bot_text("feedback_reply", user_id=target_id, reply=text),
-            )
-        for att in media_atts:
-            att_type = att.get("type", "file")
-            token = att.get("payload", {}).get("token", "")
-            if token:
-                await bot.forward_attachment(target_id, att_type, token)
-        set_state(target_id, "waiting_feedback")
-        clear_state(user_id)
+        set_state(
+            user_id,
+            "adm_feedback_add_buttons",
+            target_user_id=state_data.get("target_user_id"),
+            feedback_text=text,
+            feedback_media=media_atts,
+            feedback_buttons=[],
+        )
         await bot.send_message(
-            chat_id, "✅ Ответ отправлен пользователю.",
-            keyboard=akb.admin_main(),
+            chat_id,
+            "➕ Добавить кнопки к ответу?\n\n"
+            "Можно комбинировать тарифы и сторонние ссылки (до 5 кнопок).\n"
+            "• **Сторонняя ссылка** — переход на URL\n"
+            "• **Кнопка тарифа** — оформление тарифа в боте\n"
+            "• **Без кнопки** — отправить ответ сразу",
+            keyboard=akb.admin_feedback_add_buttons(),
+        )
+        return True
+
+    if state in ("adm_feedback_wait_input_button", "adm_feedback_buttons_added"):
+        parsed_buttons, invalid_line = parse_inline_button_lines(text)
+        if invalid_line is not None or not parsed_buttons:
+            await bot.send_message(
+                chat_id,
+                "❌ Неверный формат! Используйте:\n"
+                "**Текст кнопки - URL**\n\n"
+                "Пример: Подробнее - https://example.com",
+                keyboard=akb.admin_cancel_feedback_reply(),
+            )
+            return True
+        buttons = list(state_data.get("feedback_buttons", []))
+        if len(buttons) + len(parsed_buttons) > 5:
+            await bot.send_message(
+                chat_id,
+                "❌ Максимум 5 кнопок в ответе.",
+                keyboard=akb.admin_cancel_feedback_reply(),
+            )
+            return True
+        buttons.extend(parsed_buttons)
+        set_state(
+            user_id,
+            "adm_feedback_buttons_added",
+            target_user_id=state_data.get("target_user_id"),
+            feedback_text=state_data.get("feedback_text", ""),
+            feedback_media=state_data.get("feedback_media", []),
+            feedback_buttons=buttons,
+        )
+        await bot.send_message(
+            chat_id,
+            format_inline_buttons_message(buttons, title="✅ Кнопки ответа:"),
+            keyboard=akb.admin_feedback_button_list(buttons, len(buttons) < 5),
         )
         return True
 
@@ -3369,6 +3522,32 @@ def _format_broadcast_buttons_message(buttons: list[dict]) -> str:
 
 def _build_broadcast_keyboard(buttons: list[dict]) -> dict:
     return build_inline_keyboard(buttons)
+
+
+async def _send_feedback_reply(
+    bot: MaxBot,
+    target_user_id: int,
+    text: str,
+    media: list[dict],
+    keyboard: dict | None = None,
+) -> None:
+    """Отправляет сохранённый ответ обратной связи вместе с кнопками."""
+    if text:
+        rendered_text = await db.get_bot_text(
+            "feedback_reply",
+            user_id=target_user_id,
+            reply=text,
+        )
+        await bot.send_message(target_user_id, rendered_text, keyboard=keyboard)
+
+    for index, attachment in enumerate(media):
+        attachment_keyboard = keyboard if not text and index == 0 else None
+        await bot.forward_attachment(
+            target_user_id,
+            attachment.get("type", "file"),
+            attachment.get("token", ""),
+            keyboard=attachment_keyboard,
+        )
 
 
 async def _render_broadcast_text(text: str, user_id: int) -> str:
