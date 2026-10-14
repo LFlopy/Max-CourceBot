@@ -9,7 +9,7 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=10)
+DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=20)
 
 ALFABANK_BASE_URL = "https://payment.alfabank.ru/payment/rest"
 
